@@ -1,0 +1,37 @@
+{
+  "name": "parte-diario",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --workspace @parte/api",
+    "dev:web": "npm run dev --workspace @parte/web",
+    "build": "npm run build --workspace @parte/shared && npm run build --workspace @parte/web && npm run build --workspace @parte/api",
+    "typecheck": "npm run typecheck --workspace @parte/shared && npm run typecheck --workspace @parte/api && npm run typecheck --workspace @parte/web",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "npm run db:generate --workspace @parte/api",
+    "db:push": "npm run db:push --workspace @parte/api",
+    "db:migrate": "npm run db:migrate --workspace @parte/api"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.6",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
+    "typescript-eslint": "^8.72.1"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}

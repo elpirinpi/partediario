@@ -1,0 +1,35 @@
+[package]
+name = "parte-diario-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.parte-diario-parser]
+path = "../crates/parser"
+
+[[bin]]
+name = "parse_chat_txt"
+path = "fuzz_targets/parse_chat_txt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "group_novedades"
+path = "fuzz_targets/group_novedades.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
+
+# Este paquete es un workspace independiente para no interferir con el
+# workspace principal de la aplicación de escritorio.
+[workspace]

@@ -1,0 +1,26 @@
+[package]
+name = "parte-diario-updater"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Actualizador seguro con respaldo y rollback para el Parte Diario"
+
+[dependencies]
+parte-diario-core = { path = "../core" }
+chrono.workspace = true
+reqwest.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

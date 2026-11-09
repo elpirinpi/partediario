@@ -1,0 +1,19 @@
+/target/
+# Cargo.lock SÍ se versiona: es un workspace con binario (parte-diario).
+*.zip
+.DS_Store
+
+# --- Stack web (TypeScript) ---
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+data/
+apps/api/data/
+*.log
+
+# Drizzle: los snapshots generados se versionan; la carpeta local se ignora
+apps/api/drizzle/meta/_journal.json.bak

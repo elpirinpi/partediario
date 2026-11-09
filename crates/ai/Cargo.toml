@@ -1,0 +1,21 @@
+[package]
+name = "parte-diario-ai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Clientes de IA y limpieza local para el Parte Diario"
+
+[dependencies]
+parte-diario-core = { path = "../core" }
+regex.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest = "1.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,52 @@
+name: Fuzz
+
+# Fuzzing de los puntos de entrada que procesan datos no confiables
+# (exportaciones de WhatsApp). Se ejecuta a diario y bajo demanda.
+#
+# Nota: libFuzzer requiere nightly (-Zsanitizer=address).
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fuzz:
+    name: cargo-fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_chat_txt, group_novedades]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "fuzz -> target"
+      # cargo-fuzz no está en el catálogo de taiki-e/install-action; se compila
+      # con nightly (rust-cache acelera las dependencias entre ejecuciones).
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+      - run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300 -rss_limit_mb=4096
+      - name: Subir artefactos si hay fallo
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

@@ -1,0 +1,14 @@
+# Configuración de cargo-audit para el workspace Rust.
+#
+# `quick-xml 0.30` entra de forma TRANSITIVA por `zbus_xml` (accesibilidad de
+# eframe/accesskit en Linux). Nosotros usamos `quick-xml 0.41` directamente
+# (ya corregido) y nunca procesamos XML de D-Bus: la entrada proviene del bus
+# de accesibilidad local, no de la red. Ambos avisos son de denegación de
+# servicio (complejidad cuadrática y consumo de memoria), no de ejecución de
+# código. Se ignoran por ID; si algún día se actualiza eframe/accesskit y
+# desaparece el 0.30, elimine estas líneas.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0194", # quick-xml: runtime cuadrático con atributos duplicados
+    "RUSTSEC-2026-0195", # quick-xml: asignación sin límite en NsReader
+]

@@ -1,0 +1,23 @@
+[package]
+name = "parte-diario-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Tipos, rutas, errores, privacidad y validación de ZIP del Parte Diario"
+
+[dependencies]
+chrono.workspace = true
+dirs.workspace = true
+regex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[build-dependencies]
+chrono.workspace = true
+
+[lints]
+workspace = true

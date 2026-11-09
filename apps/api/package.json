@@ -1,0 +1,46 @@
+{
+  "name": "@parte/api",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "bin": "src/index.ts",
+  "pkg": {
+    "assets": [
+      "../../web/dist/**/*"
+    ],
+    "targets": [
+      "node20-win-x64"
+    ]
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push --force",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "@parte/shared": "*",
+    "better-auth": "^1.7.18",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^17.2.0",
+    "drizzle-orm": "^0.45.4",
+    "fast-xml-parser": "^5.2.5",
+    "hono": "^4.13.16",
+    "jszip": "^3.10.2",
+    "postgres": "^4.1.0",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.0.0",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3"
+  }
+}

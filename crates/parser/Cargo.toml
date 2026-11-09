@@ -1,0 +1,20 @@
+[package]
+name = "parte-diario-parser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Parser de exportaciones de WhatsApp y agrupación de novedades"
+
+[dependencies]
+chrono.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+proptest = "1.0"
+fastrand = "2"
+
+[lints]
+workspace = true

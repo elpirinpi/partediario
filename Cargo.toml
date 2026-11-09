@@ -1,0 +1,74 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/parser",
+    "crates/ai",
+    "crates/docx",
+    "crates/config",
+    "crates/updater",
+    "crates/app",
+]
+resolver = "2"
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+authors = ["Digitador N3"]
+repository = "https://github.com/elpirinpi/partediario"
+description = "Generador de Partes Diarios (Anti-Ruidos y Contaminación Sónica, P.N.) a partir de exportaciones de WhatsApp"
+
+[workspace.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+dirs = "5"
+eframe = "0.29"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "gif", "webp"] }
+insta = { version = "1", features = ["yaml"] }
+open = "5"
+quick-xml = "0.41"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "native-tls"] }
+rfd = "0.15"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+toml = "0.8"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Lints de pedantic que en este proyecto son ruido o no aportan valor:
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+assigning_clones = "allow"
+map_unwrap_or = "allow"
+too_many_lines = "allow"
+implicit_hasher = "allow"
+struct_excessive_bools = "allow"
+similar_names = "allow"
+many_single_char_names = "allow"
+unreadable_literal = "allow"
+items_after_statements = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

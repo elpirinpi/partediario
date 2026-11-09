@@ -1,0 +1,157 @@
+name: Release
+
+# Publica el instalador MSI y el ZIP del ejecutable al crear un tag vX.Y.Z.
+# La versión del tag debe coincidir con la versión de parte-diario-app.
+#
+# Repositorio privado: configure la variable UPDATE_REPOSITORY con un repo
+# público de releases (ej. elpirinpi/partediario-releases) y el secreto
+# RELEASE_TOKEN (PAT con Contents: Read and write sobre ese repo). El código
+# puede seguir privado; el actualizador solo necesita acceso público a las
+# releases. Sin UPDATE_REPOSITORY se publica en este mismo repositorio.
+#
+# Firma de código (opcional): configure los secretos
+#   WINDOWS_CERT_PFX_BASE64  → certificado .pfx en base64
+#   WINDOWS_CERT_PASSWORD    → contraseña del .pfx
+# Si no existen, la release se publica sin firmar (con un aviso).
+#
+# Orden importante: el .exe se firma ANTES de construir el MSI para que el
+# instalador incruste el ejecutable firmado; después se firma el MSI.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows:
+    name: Windows (MSI + ZIP)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      # El binario publicado busca actualizaciones en este repositorio. Si el
+      # código está privado, UPDATE_REPOSITORY apunta al repo público de
+      # releases; si no está definida, se usa este mismo repositorio.
+      PARTE_DIARIO_UPDATE_REPOSITORY: ${{ vars.UPDATE_REPOSITORY || github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Comprobar versión del tag
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $pkg = $meta.packages | Where-Object { $_.name -eq 'parte-diario-app' }
+          if (-not $pkg) { throw "No se encontró el paquete parte-diario-app" }
+          $version = $pkg.version
+          $tag = ($env:GITHUB_REF_NAME).TrimStart('v')
+          if ($version -ne $tag) {
+            throw "El tag v$tag no coincide con la versión $version de parte-diario-app"
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Output "Versión: $version"
+
+      - name: Instalar cargo-wix
+        run: cargo install cargo-wix --locked --version 0.3.9
+
+      - name: Ejecutar tests
+        run: cargo test --locked --workspace
+
+      - name: Asegurar WiX Toolset 3
+        shell: pwsh
+        run: |
+          $candle = Get-Command candle.exe -ErrorAction SilentlyContinue
+          if ($candle) {
+            $bin = Split-Path $candle.Source -Parent
+            "WIX_BIN=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Output "WiX Toolset ya está disponible en $bin"
+            exit 0
+          }
+          $zip = Join-Path $env:RUNNER_TEMP "wix314-binaries.zip"
+          $bin = Join-Path $env:RUNNER_TEMP "wix314\bin"
+          Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $bin -Force
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "WIX_BIN=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Output "WiX instalado en $bin"
+
+      - name: Compilar binario release
+        run: cargo build --release --locked -p parte-diario-app --bin parte-diario
+
+      - name: Firmar ejecutable (opcional)
+        if: env.WINDOWS_CERT_PFX_BASE64 != ''
+        shell: pwsh
+        run: ./scripts/sign-windows.ps1 "target/release/parte-diario.exe"
+
+      - name: Compilar MSI
+        working-directory: crates/app
+        shell: pwsh
+        run: cargo wix -p parte-diario-app --no-build --nocapture -b $env:WIX_BIN
+
+      - name: Preparar artefactos
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target/release/parte-diario.exe" "dist/parte-diario.exe"
+          $msi = Get-ChildItem "target/wix/*.msi" | Select-Object -First 1
+          if (-not $msi) { throw "No se generó el MSI" }
+          Copy-Item $msi.FullName "dist/ParteDiario-${env:VERSION}-x64.msi"
+          Write-Output "MSI: $($msi.Name)"
+
+      - name: Firmar MSI (opcional)
+        if: env.WINDOWS_CERT_PFX_BASE64 != ''
+        shell: pwsh
+        run: ./scripts/sign-windows.ps1 "dist/ParteDiario-${env:VERSION}-x64.msi"
+
+      - name: Aviso de firma omitida
+        if: env.WINDOWS_CERT_PFX_BASE64 == ''
+        run: |
+          Write-Output "::warning::Los binarios no se firmaron: falta el secreto WINDOWS_CERT_PFX_BASE64"
+
+      - name: Crear ZIP y checksums SHA-256
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/parte-diario.exe" -DestinationPath "dist/parte-diario-windows-x64.zip" -Force
+          $files = @(
+            "dist/parte-diario-windows-x64.zip",
+            "dist/ParteDiario-${env:VERSION}-x64.msi",
+            "dist/parte-diario.exe"
+          )
+          foreach ($file in $files) {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+            $name = Split-Path $file -Leaf
+            "$hash  $name" | Out-File -FilePath "$file.sha256" -Encoding ascii
+          }
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v3
+        with:
+          # Si UPDATE_REPOSITORY está definido, la release se publica allí
+          # (repo público) usando RELEASE_TOKEN. Si no, en este repositorio.
+          repository: ${{ vars.UPDATE_REPOSITORY || github.repository }}
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          tag_name: ${{ github.ref_name }}
+          name: Parte Diario ${{ github.ref_name }}
+          body: |
+            Parte Diario ${{ github.ref_name }}
+
+            Instalador MSI y ZIP de actualización.
+          files: |
+            dist/parte-diario.exe
+            dist/parte-diario.exe.sha256
+            dist/parte-diario-windows-x64.zip
+            dist/parte-diario-windows-x64.zip.sha256
+            dist/ParteDiario-*-x64.msi
+            dist/ParteDiario-*-x64.msi.sha256
