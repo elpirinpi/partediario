@@ -4,7 +4,9 @@ use parte_diario_core::paths;
 
 use crate::write_atomic;
 
+#[cfg(windows)]
 const SERVICE: &str = "parte-diario";
+#[cfg(windows)]
 const USER: &str = "llm-api-key";
 
 #[cfg(windows)]
@@ -12,6 +14,7 @@ fn keyring_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, USER).map_err(|e| e.to_string())
 }
 
+#[cfg(windows)]
 fn keyring_disabled() -> bool {
     std::env::var("PARTE_DIARIO_DISABLE_KEYRING")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
