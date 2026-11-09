@@ -2844,7 +2844,7 @@ dependencies = [
 
 [[package]]
 name = "parte-diario-ai"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "parte-diario-core",
  "proptest",
@@ -2855,7 +2855,7 @@ dependencies = [
 
 [[package]]
 name = "parte-diario-app"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "chrono",
  "eframe",
@@ -2879,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "parte-diario-config"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -2898,7 +2898,7 @@ dependencies = [
 
 [[package]]
 name = "parte-diario-core"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "parte-diario-docx"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "chrono",
  "image",
@@ -2927,7 +2927,7 @@ dependencies = [
 
 [[package]]
 name = "parte-diario-parser"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "chrono",
  "fastrand",
@@ -2937,7 +2937,7 @@ dependencies = [
 
 [[package]]
 name = "parte-diario-updater"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "chrono",
  "parte-diario-core",
