@@ -16,11 +16,9 @@ mod preview;
 mod theme;
 
 use self::theme::{
-    app_visuals, banner, btn_action, btn_gold, btn_primary, btn_secondary, btn_tertiary, card,
-    dashed_rect, font_bold, font_semibold, overline, pill, pill_tint, section_title, seg_button,
-    stepper, StepState, ACCENT, ACCENT_HOVER, ACCENT_LINE, ACCENT_TINT, BG_CARD, BG_HOVER,
-    BORDER_SUBTLE, DEEP_BG, DEEP_SUB, DEEP_TEXT, INFO_TINT, ON_ACCENT, SUCCESS, SUCCESS_LINE,
-    SUCCESS_TINT, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, WARNING, WARN_LINE, WARN_TINT,
+    apply_theme, banner, btn_action, btn_gold, btn_primary, btn_primary_enabled, btn_secondary,
+    btn_secondary_enabled, btn_tertiary, card, check_badge, dashed_rect, font_bold, font_semibold,
+    overline, pal, pill, pill_tint, section_title, seg_button, set_palette, stepper, StepState,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -72,6 +70,10 @@ pub struct App {
     pending_llm: Vec<(usize, Receiver<Result<String, String>>)>,
     llm_busy: HashSet<usize>,
     llm_batch_total: usize,
+    /// Deshacer de la última formalización masiva ("Formalizar todas" o
+    /// "Limpieza a todas"): (etiqueta de la acción, textos formales previos
+    /// por id de novedad). Un solo nivel de deshacer.
+    undo_formal: Option<(String, Vec<(usize, String)>)>,
     textures: HashMap<String, egui::TextureHandle>,
     show_settings: bool,
     api_key_edit: String,
@@ -81,6 +83,11 @@ pub struct App {
     anonymize_edit: bool,
     update_repository_edit: String,
     check_updates_on_startup_edit: bool,
+    /// Borradores de los ajustes de apariencia (se aplican al Guardar).
+    dark_mode_edit: bool,
+    compact_view_edit: bool,
+    /// Id del campo de búsqueda, para enfocarlo con Ctrl+F.
+    search_field_id: Option<egui::Id>,
     available_update: Option<parte_diario_updater::UpdateInfo>,
     update_rx: Option<Receiver<Result<Option<parte_diario_updater::UpdateInfo>, String>>>,
     update_action_rx: Option<Receiver<Result<String, String>>>,
@@ -106,20 +113,17 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Forzar SIEMPRE tema claro (Concepto A "Esencial"): egui 0.29 sigue
-        // el tema del sistema por defecto (Windows en modo oscuro ⇒
-        // Visuals::dark ⇒ paneles oscuros mezclados con los widgets claros).
-        // Se aplica a AMBOS estilos para que ningún cambio de tema del OS
-        // pueda romper la interfaz.
+        // La configuración se carga ANTES de aplicar el tema, porque el
+        // tema (claro/oscuro) y la densidad (compacta) viven en ella.
+        let cfg = history::load_config();
+        // egui 0.29 sigue el tema del sistema por defecto (Windows en modo
+        // oscuro ⇒ Visuals::dark ⇒ paneles oscuros mezclados con los
+        // widgets claros). Se fijan AMBOS estilos al tema elegido para que
+        // ningún cambio de tema del OS pueda romper la interfaz.
         cc.egui_ctx.set_theme(egui::ThemePreference::Light);
         // Inter (Regular / SemiBold / Bold) desde assets/fonts/.
         theme::install_fonts(&cc.egui_ctx);
-        let visuals = app_visuals();
-        cc.egui_ctx
-            .set_visuals_of(egui::Theme::Dark, visuals.clone());
-        cc.egui_ctx.set_visuals_of(egui::Theme::Light, visuals);
-        cc.egui_ctx.all_styles_mut(theme::apply_style);
-        let cfg = history::load_config();
+        apply_theme(&cc.egui_ctx, cfg.dark_mode, cfg.compact_view);
         let hist = history::load_history();
         let template_path = if cfg.last_template.is_empty() {
             None
@@ -140,6 +144,9 @@ impl App {
             anonymize_edit: cfg.anonymize,
             update_repository_edit: cfg.update_repository.clone(),
             check_updates_on_startup_edit: cfg.check_updates_on_startup,
+            dark_mode_edit: cfg.dark_mode,
+            compact_view_edit: cfg.compact_view,
+            search_field_id: None,
             available_update: None,
             update_rx: None,
             update_action_rx: None,
@@ -163,6 +170,7 @@ impl App {
             pending_llm: Vec::new(),
             llm_busy: HashSet::new(),
             llm_batch_total: 0,
+            undo_formal: None,
             textures: HashMap::new(),
             show_settings: false,
             generated_path: None,
@@ -378,6 +386,7 @@ impl App {
         self.generated_path = None;
         self.success_msg = None;
         self.replace_armed = false;
+        self.undo_formal = None;
         self.filter.clear();
         self.zip_path = None;
 
@@ -754,6 +763,36 @@ impl App {
         ));
     }
 
+    /// Textos formales actuales de las novedades que una acción masiva va
+    /// a reescribir: el punto de deshacer de esa acción.
+    fn snapshot_formal(&self) -> Vec<(usize, String)> {
+        self.novedades
+            .iter()
+            .filter(|n| n.include && !n.body_raw.trim().is_empty())
+            .map(|n| (n.id, n.body_formal.clone()))
+            .collect()
+    }
+
+    /// Restaura los textos formales guardados por la última acción masiva
+    /// y consume el deshacer. Solo se llama cuando ninguna formalización
+    /// está en curso, para que un resultado tardío no vuelva a pisar el
+    /// texto restaurado.
+    fn undo_bulk_formalize(&mut self) {
+        let Some((label, prev)) = self.undo_formal.take() else {
+            return;
+        };
+        let mut k = 0;
+        for (id, text) in prev {
+            if let Some(n) = self.novedades.iter_mut().find(|n| n.id == id) {
+                n.body_formal = text;
+                k += 1;
+            }
+        }
+        self.log(format!(
+            "Deshecha la acción «{label}»: se restauraron {k} textos formales."
+        ));
+    }
+
     fn poll_llm(&mut self) {
         let mut results: Vec<(usize, Result<String, String>)> = Vec::new();
         self.pending_llm.retain(|(id, rx)| match rx.try_recv() {
@@ -810,6 +849,41 @@ impl App {
             }
         }
         self.log("No quedan novedades pendientes de formalizar. Todo al día.");
+    }
+
+    /// Navegación desde el stepper: cada paso clicable (hecho o actual)
+    /// lleva a su pantalla/acción. Los pendientes no llegan aquí (el
+    /// stepper no los devuelve), así que no se puede saltar a un paso que
+    /// aún no se alcanzó.
+    fn goto_step(&mut self, idx: usize) {
+        match idx {
+            // Cargar: abrir el selector del .zip.
+            0 => self.pick_zip(),
+            // Analizar: la lista de novedades.
+            1 => self.view = ViewMode::Edit,
+            // Extraer: el editor, en la siguiente novedad sin formalizar.
+            2 => {
+                self.view = ViewMode::Edit;
+                self.next_pending();
+            }
+            // Generar: igual que el botón dorado del inspector.
+            3 => self.generate(),
+            // Editar: la vista previa del documento.
+            4 => {
+                self.view = ViewMode::Preview;
+                self.preview_seen = true;
+            }
+            // Exportar: abrir el .docx generado (si existe).
+            5 => {
+                if let Some(gp) = self.generated_path.clone() {
+                    match open::that(&gp) {
+                        Ok(()) => self.exported = true,
+                        Err(e) => self.log(format!("No se pudo abrir el archivo: {e}")),
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     // ---------- generación ----------
@@ -918,8 +992,13 @@ impl App {
                 ));
                 self.generated_path = Some(out_path.clone());
                 self.success_msg = Some(format!(
-                    "Parte Diario generado: {} novedades y {} fotos incrustadas.",
-                    res.novedades_incluidas, res.images_embedded
+                    "Parte Diario generado: {} novedades y {} fotos incrustadas.\nArchivo: {}",
+                    res.novedades_incluidas,
+                    res.images_embedded,
+                    out_path
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_default()
                 ));
                 // Historial: reutilizar el SHA-256 del zip ya calculado al cargar
                 // y guardar el txt_sha256 para que la detección de duplicados
@@ -1074,7 +1153,9 @@ impl App {
         })
     }
 
-    /// Lista de índices visibles según el filtro de búsqueda.
+    /// Lista de índices visibles según el filtro de búsqueda. Busca en el
+    /// texto original, en el texto formal y en los encabezados, además del
+    /// número de novedad con #N.
     fn visible_novedades(&self) -> Vec<usize> {
         let q = self.filter.trim().to_lowercase();
         if q.is_empty() {
@@ -1086,6 +1167,7 @@ impl App {
                 let n = &self.novedades[i];
                 format!("{}", n.id) == id_q
                     || n.body_raw.to_lowercase().contains(&q)
+                    || n.body_formal.to_lowercase().contains(&q)
                     || n.headers.join(" ").to_lowercase().contains(&q)
             })
             .collect()
@@ -1131,8 +1213,28 @@ fn parse_fecha(s: &str) -> Option<NaiveDate> {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Reponer la paleta activa en cada fotograma (el dato temporal del
+        // Context puede limpiarse entre fotogramas).
+        set_palette(ctx, self.cfg.dark_mode);
         self.poll_llm();
         self.poll_updates(ctx);
+
+        // ================= Atajos de teclado =================
+        // Solo cuando ningún campo de texto tiene el foco (no interferir
+        // con la edición): Ctrl+O cargar .zip, Ctrl+G generar, Ctrl+F
+        // buscar en las novedades.
+        if !ctx.wants_keyboard_input() {
+            let cmd = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
+            if cmd && ctx.input(|i| i.key_pressed(egui::Key::O)) {
+                self.pick_zip();
+            } else if cmd && ctx.input(|i| i.key_pressed(egui::Key::G)) {
+                self.generate();
+            } else if cmd && ctx.input(|i| i.key_pressed(egui::Key::F)) {
+                if let Some(id) = self.search_field_id {
+                    ctx.memory_mut(|m| m.request_focus(id));
+                }
+            }
+        }
 
         // ================= Arrastrar y soltar =================
         let hovered = ctx.input(|i| i.raw.hovered_files.clone());
@@ -1176,8 +1278,8 @@ impl eframe::App for App {
             egui::TopBottomPanel::top("update_banner")
                 .frame(
                     egui::Frame::none()
-                        .fill(*INFO_TINT)
-                        .stroke(egui::Stroke::new(1.0_f32, *ACCENT_LINE))
+                        .fill(theme::palette(ctx).info_tint)
+                        .stroke(egui::Stroke::new(1.0_f32, theme::palette(ctx).accent_line))
                         .inner_margin(egui::Margin::symmetric(12.0, 8.0)),
                 )
                 .show(ctx, |ui| {
@@ -1188,7 +1290,7 @@ impl eframe::App for App {
                                 update.latest_version,
                                 parte_diario_core::build_info::VERSION
                             ))
-                            .color(TEXT_PRIMARY)
+                            .color(pal(ui).text_primary)
                             .strong(),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1224,7 +1326,7 @@ impl eframe::App for App {
                         n_fotos
                     ))
                     .size(12.0)
-                    .color(TEXT_SECONDARY),
+                    .color(pal(ui).text_secondary),
                 );
                 ui.separator();
                 ui.label(
@@ -1234,7 +1336,7 @@ impl eframe::App for App {
                         parte_diario_core::build_info::GIT_HASH
                     ))
                     .size(12.0)
-                    .color(TEXT_MUTED),
+                    .color(pal(ui).text_muted),
                 );
                 // Progreso de formalización en curso.
                 if !self.llm_busy.is_empty() {
@@ -1247,11 +1349,11 @@ impl eframe::App for App {
                             done, self.llm_batch_total
                         ))
                         .size(12.0)
-                        .color(ACCENT),
+                        .color(pal(ui).accent),
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if btn_tertiary(ui, &format!("📝 Registro ({})", self.log.len())).clicked() {
+                    if btn_tertiary(ui, &format!("Registro ({})", self.log.len())).clicked() {
                         self.show_log = !self.show_log;
                     }
                 });
@@ -1266,26 +1368,26 @@ impl eframe::App for App {
                 // Marca "PD" + nombre de la app.
                 ui.horizontal(|ui| {
                     egui::Frame::none()
-                        .fill(ACCENT)
+                        .fill(pal(ui).accent)
                         .rounding(10.0)
                         .inner_margin(egui::Margin::symmetric(10.0, 8.0))
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new("PD")
                                     .font(font_bold(17.0))
-                                    .color(ON_ACCENT),
+                                    .color(pal(ui).on_accent),
                             );
                         });
                     ui.vertical(|ui| {
                         ui.label(
                             egui::RichText::new("Parte Diario")
                                 .font(font_semibold(15.0))
-                                .color(TEXT_PRIMARY),
+                                .color(pal(ui).text_primary),
                         );
                         ui.label(
                             egui::RichText::new("Anti-Ruidos y Contaminación Sónica")
                                 .size(11.0)
-                                .color(TEXT_MUTED),
+                                .color(pal(ui).text_muted),
                         );
                     });
                 });
@@ -1295,26 +1397,30 @@ impl eframe::App for App {
                 if ui.selectable_label(true, "+  Nuevo parte").clicked() {
                     self.pick_zip();
                 }
-                if ui.selectable_label(false, "🕘  Historial").clicked() {
+                if ui.selectable_label(false, "Historial").clicked() {
                     self.show_history = true;
                 }
-                if ui.selectable_label(false, "📄  Plantillas").clicked() {
+                if ui.selectable_label(false, "Plantillas").clicked() {
                     self.pick_template();
                 }
-                if ui.selectable_label(false, "⚙  Ajustes").clicked() {
+                if ui.selectable_label(false, "Ajustes").clicked() {
                     self.api_key_edit = self.cfg.api_key.clone();
                     self.provider_edit = self.cfg.provider.clone();
                     self.model_edit = self.cfg.model.clone();
                     self.output_dir_edit = self.cfg.output_dir.clone();
                     self.update_repository_edit = self.cfg.update_repository.clone();
                     self.check_updates_on_startup_edit = self.cfg.check_updates_on_startup;
+                    self.dark_mode_edit = self.cfg.dark_mode;
+                    self.compact_view_edit = self.cfg.compact_view;
                     self.show_settings = true;
                 }
-                if ui.selectable_label(false, "✨  IA").clicked() {
+                if ui.selectable_label(false, "IA").clicked() {
                     self.api_key_edit = self.cfg.api_key.clone();
                     self.provider_edit = self.cfg.provider.clone();
                     self.model_edit = self.cfg.model.clone();
                     self.output_dir_edit = self.cfg.output_dir.clone();
+                    self.dark_mode_edit = self.cfg.dark_mode;
+                    self.compact_view_edit = self.cfg.compact_view;
                     self.show_settings = true;
                 }
 
@@ -1330,7 +1436,7 @@ impl eframe::App for App {
                         egui::Layout::top_down(egui::Align::LEFT),
                         |ui| {
                             egui::Frame::none()
-                                .fill(DEEP_BG)
+                                .fill(pal(ui).deep_bg)
                                 .rounding(12.0)
                                 .inner_margin(12.0)
                                 .show(ui, |ui| {
@@ -1340,18 +1446,20 @@ impl eframe::App for App {
                                             ui.label(
                                                 egui::RichText::new("Turno de hoy")
                                                     .font(font_semibold(13.5))
-                                                    .color(DEEP_TEXT),
+                                                    .color(pal(ui).deep_text),
                                             );
                                             ui.add_space(4.0);
                                             let hoy =
                                                 chrono::Local::now().format("%d-%m-%Y").to_string();
                                             ui.label(
-                                                egui::RichText::new(hoy).size(12.0).color(DEEP_SUB),
+                                                egui::RichText::new(hoy)
+                                                    .size(12.0)
+                                                    .color(pal(ui).deep_sub),
                                             );
                                             ui.label(
                                                 egui::RichText::new("08:00 a 08:00")
                                                     .size(12.0)
-                                                    .color(DEEP_SUB),
+                                                    .color(pal(ui).deep_sub),
                                             );
                                             let n_inc =
                                                 self.novedades.iter().filter(|n| n.include).count();
@@ -1366,7 +1474,7 @@ impl eframe::App for App {
                                                     )
                                                 })
                                                 .size(12.0)
-                                                .color(DEEP_TEXT),
+                                                .color(pal(ui).deep_text),
                                             );
                                         },
                                     );
@@ -1384,7 +1492,7 @@ impl eframe::App for App {
                 ui.label(
                     egui::RichText::new("Resumen")
                         .font(font_semibold(16.0))
-                        .color(TEXT_PRIMARY),
+                        .color(pal(ui).text_primary),
                 );
                 ui.add_space(8.0);
 
@@ -1427,13 +1535,13 @@ impl eframe::App for App {
                 ];
                 for (k, v) in rows {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(k).size(12.0).color(TEXT_MUTED));
+                        ui.label(egui::RichText::new(k).size(12.0).color(pal(ui).text_muted));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 egui::RichText::new(v)
                                     .size(12.0)
                                     .strong()
-                                    .color(TEXT_PRIMARY),
+                                    .color(pal(ui).text_primary),
                             );
                         });
                     });
@@ -1449,7 +1557,7 @@ impl eframe::App for App {
                             .hint_text("10-10-2026")
                             .desired_width(96.0),
                     );
-                    ui.label(egui::RichText::new("a").color(TEXT_SECONDARY));
+                    ui.label(egui::RichText::new("a").color(pal(ui).text_secondary));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.date_to)
                             .hint_text("11-10-2026")
@@ -1468,8 +1576,8 @@ impl eframe::App for App {
                     .map(|n| n.photos.len())
                     .sum();
                 let mini = egui::Frame::none()
-                    .fill(BG_CARD)
-                    .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
+                    .fill(pal(ui).bg_card)
+                    .stroke(egui::Stroke::new(1.0_f32, pal(ui).border_subtle))
                     .rounding(8.0)
                     .inner_margin(12.0)
                     .show(ui, |ui| {
@@ -1479,12 +1587,12 @@ impl eframe::App for App {
                                 egui::RichText::new("PARTE DIARIO")
                                     .strong()
                                     .size(12.0)
-                                    .color(ACCENT),
+                                    .color(pal(ui).accent),
                             );
                             ui.label(
                                 egui::RichText::new("Anti-Ruidos y Contaminación Sónica, P.N.")
                                     .size(11.0)
-                                    .color(TEXT_MUTED),
+                                    .color(pal(ui).text_muted),
                             );
                             ui.add_space(4.0);
                             let fecha_doc = parse_fecha(&self.date_from)
@@ -1495,19 +1603,19 @@ impl eframe::App for App {
                                     None => "Configure el rango de fechas.".to_string(),
                                 })
                                 .size(11.0)
-                                .color(TEXT_SECONDARY),
+                                .color(pal(ui).text_secondary),
                             );
                             ui.add_space(4.0);
                             ui.label(
                                 egui::RichText::new(format!("{n_inc} novedades, {n_fotos} fotos"))
                                     .size(11.0)
-                                    .color(TEXT_MUTED),
+                                    .color(pal(ui).text_muted),
                             );
                             if self.novedades.is_empty() {
                                 ui.label(
                                     egui::RichText::new("Aún no hay novedades cargadas.")
                                         .size(11.0)
-                                        .color(TEXT_MUTED),
+                                        .color(pal(ui).text_muted),
                                 );
                             }
                         });
@@ -1523,11 +1631,10 @@ impl eframe::App for App {
 
                 // Selector Editar | Vista previa.
                 ui.horizontal(|ui| {
-                    if seg_button(ui, "✏️ Editar", self.view == ViewMode::Edit).clicked() {
+                    if seg_button(ui, "Editar", self.view == ViewMode::Edit).clicked() {
                         self.view = ViewMode::Edit;
                     }
-                    if seg_button(ui, "👁 Vista previa", self.view == ViewMode::Preview).clicked()
-                    {
+                    if seg_button(ui, "Vista previa", self.view == ViewMode::Preview).clicked() {
                         self.view = ViewMode::Preview;
                         self.preview_seen = true;
                     }
@@ -1559,10 +1666,20 @@ impl eframe::App for App {
                             .max_height(140.0)
                             .show(ui, |ui| {
                                 for w in &self.warnings {
-                                    banner(ui, &format!("⚠ {w}"), *WARN_TINT, *WARN_LINE);
+                                    banner(
+                                        ui,
+                                        &format!("⚠ {w}"),
+                                        pal(ui).warn_tint,
+                                        pal(ui).warn_line,
+                                    );
                                 }
                                 for i in &self.info {
-                                    banner(ui, &format!("ℹ {i}"), *INFO_TINT, *ACCENT_LINE);
+                                    banner(
+                                        ui,
+                                        &format!("ℹ {i}"),
+                                        pal(ui).info_tint,
+                                        pal(ui).accent_line,
+                                    );
                                 }
                             });
                     }
@@ -1585,7 +1702,7 @@ impl eframe::App for App {
                     .iter()
                     .filter_map(|(bad, msg)| if *bad { Some(*msg) } else { None })
                     .collect();
-                    let resp = btn_gold(ui, "⚡ Generar Parte Diario");
+                    let resp = btn_gold(ui, "Generar Parte Diario");
                     let resp = if missing.is_empty() {
                         resp
                     } else {
@@ -1596,7 +1713,7 @@ impl eframe::App for App {
                     }
                     if let Some(gp) = self.generated_path.clone() {
                         ui.add_space(6.0);
-                        if btn_secondary(ui, "📂 Abrir .docx").clicked() {
+                        if btn_secondary(ui, "Abrir .docx").clicked() {
                             match open::that(&gp) {
                                 Ok(()) => self.exported = true,
                                 Err(e) => self.log(format!("No se pudo abrir el archivo: {e}")),
@@ -1606,12 +1723,19 @@ impl eframe::App for App {
                     if let Some(msg) = self.success_msg.clone() {
                         ui.add_space(6.0);
                         egui::Frame::none()
-                            .fill(*SUCCESS_TINT)
-                            .stroke(egui::Stroke::new(1.0_f32, *SUCCESS_LINE))
+                            .fill(pal(ui).success_tint)
+                            .stroke(egui::Stroke::new(1.0_f32, pal(ui).success_line))
                             .rounding(8.0)
                             .inner_margin(10.0)
                             .show(ui, |ui| {
-                                ui.label(egui::RichText::new(msg).size(12.0).color(TEXT_PRIMARY));
+                                ui.horizontal(|ui| {
+                                    check_badge(ui, pal(ui).success);
+                                    ui.label(
+                                        egui::RichText::new(msg)
+                                            .size(12.0)
+                                            .color(pal(ui).text_primary),
+                                    );
+                                });
                             });
                     }
                 });
@@ -1620,7 +1744,9 @@ impl eframe::App for App {
         // ================= Central: stepper + contenido =================
         egui::CentralPanel::default().show(ctx, |ui| {
             let steps = self.step_states();
-            stepper(ui, &steps);
+            if let Some(idx) = stepper(ui, &steps) {
+                self.goto_step(idx);
+            }
             ui.add_space(8.0);
 
             if self.novedades.is_empty() {
@@ -1637,14 +1763,14 @@ impl eframe::App for App {
                         ui.label(
                             egui::RichText::new("Carga el chat de esta noche")
                                 .font(font_semibold(22.0))
-                                .color(TEXT_PRIMARY),
+                                .color(pal(ui).text_primary),
                         );
                         ui.add_space(4.0);
                         ui.label(
                             egui::RichText::new(
                                 "Exporta el chat de WhatsApp como .zip y cárgalo aquí para armar el Parte Diario.",
                             )
-                            .color(TEXT_SECONDARY),
+                            .color(pal(ui).text_secondary),
                         );
                         ui.add_space(24.0);
                     });
@@ -1658,29 +1784,29 @@ impl eframe::App for App {
                             egui::vec2(zone_w, zone_h),
                             egui::Sense::hover(),
                         );
-                        dashed_rect(ui.painter(), rect, *ACCENT_LINE);
+                        dashed_rect(ui.painter(), rect, pal(ui).accent_line);
                         ui.painter().text(
                             rect.center() - egui::vec2(0.0, 10.0),
                             egui::Align2::CENTER_CENTER,
                             "Arrastra tu archivo .zip aquí",
                             egui::FontId::proportional(14.0),
-                            TEXT_SECONDARY,
+                            pal(ui).text_secondary,
                         );
                         ui.painter().text(
                             rect.center() + egui::vec2(0.0, 12.0),
                             egui::Align2::CENTER_CENTER,
                             "o suéltalo sobre esta ventana",
                             egui::FontId::proportional(12.0),
-                            TEXT_MUTED,
+                            pal(ui).text_muted,
                         );
                     });
                     ui.add_space(16.0);
                     ui.vertical_centered(|ui| {
                         ui.horizontal(|ui| {
-                            if btn_action(ui, "📂 Cargar .zip de WhatsApp").clicked() {
+                            if btn_action(ui, "Cargar .zip de WhatsApp").clicked() {
                                 self.pick_zip();
                             }
-                            if btn_secondary(ui, "👁 Ver ejemplo de exportación").clicked() {
+                            if btn_secondary(ui, "Ver ejemplo de exportación").clicked() {
                                 self.view = ViewMode::Preview;
                                 self.preview_seen = true;
                             }
@@ -1702,7 +1828,7 @@ impl eframe::App for App {
                         ui.label(
                             egui::RichText::new(format!("Novedades ({})", self.novedades.len()))
                                 .font(font_semibold(16.0))
-                                .color(TEXT_PRIMARY),
+                                .color(pal(ui).text_primary),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if btn_tertiary(ui, "Excluir todas").clicked() {
@@ -1719,30 +1845,43 @@ impl eframe::App for App {
                     });
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        ui.add(
+                        let search_resp = ui.add(
                             egui::TextEdit::singleline(&mut self.filter)
                                 .id_salt("search_field")
-                                .hint_text("Buscar por texto o #número…")
+                                .hint_text("Buscar en texto original, formal o #número…")
                                 .desired_width(f32::INFINITY),
                         );
+                        // Guardar el id para enfocarlo con Ctrl+F.
+                        self.search_field_id = Some(search_resp.id);
                         if !self.filter.is_empty() && btn_tertiary(ui, "×").clicked() {
                             self.filter.clear();
                         }
                     });
                     ui.add_space(6.0);
                     let bw = (ui.available_width() - 8.0) / 2.0;
+                    // Mientras corre una formalización masiva, el botón se
+                    // deshabilita (visualmente) y el progreso se muestra
+                    // junto a él, no solo en la barra lateral.
+                    let llm_running = !self.llm_busy.is_empty();
+                    let llm_done = self.llm_batch_total.saturating_sub(self.llm_busy.len());
                     ui.horizontal(|ui| {
+                        let formalize_label = if llm_running {
+                            format!("Formalizando… {llm_done} de {}", self.llm_batch_total)
+                        } else {
+                            "Formalizar todas con IA".to_string()
+                        };
                         if ui
-                            .add_sized(
-                                [bw, 0.0],
+                            .add_enabled(
+                                !llm_running,
                                 egui::Button::new(
-                                    egui::RichText::new("✨ Formalizar todas con IA")
+                                    egui::RichText::new(formalize_label)
                                         .strong()
-                                        .color(ACCENT_HOVER),
+                                        .color(pal(ui).accent_hover),
                                 )
-                                .fill(*ACCENT_TINT)
-                                .stroke(egui::Stroke::new(1.0_f32, *ACCENT_LINE))
-                                .rounding(10.0),
+                                .fill(pal(ui).accent_tint)
+                                .stroke(egui::Stroke::new(1.0_f32, pal(ui).accent_line))
+                                .rounding(10.0)
+                                .min_size(egui::vec2(bw, 0.0)),
                             )
                             .clicked()
                         {
@@ -1752,6 +1891,8 @@ impl eframe::App for App {
                                 self.provider_edit = self.cfg.provider.clone();
                                 self.model_edit = self.cfg.model.clone();
                                 self.output_dir_edit = self.cfg.output_dir.clone();
+                                self.dark_mode_edit = self.cfg.dark_mode;
+                                self.compact_view_edit = self.cfg.compact_view;
                                 self.show_settings = true;
                             } else {
                                 let ids: Vec<usize> = self
@@ -1760,7 +1901,13 @@ impl eframe::App for App {
                                     .filter(|n| n.include && !n.body_raw.trim().is_empty())
                                     .map(|n| n.id)
                                     .collect();
-                                self.spawn_formalize_many(ids);
+                                if !ids.is_empty() {
+                                    // Punto de deshacer antes de reescribir.
+                                    let prev = self.snapshot_formal();
+                                    self.undo_formal =
+                                        Some(("Formalizar todas con IA".to_string(), prev));
+                                    self.spawn_formalize_many(ids);
+                                }
                             }
                         }
                         if ui
@@ -1768,14 +1915,16 @@ impl eframe::App for App {
                                 [bw, 0.0],
                                 egui::Button::new(
                                     egui::RichText::new("Limpieza a todas (sin conexión)")
-                                        .color(TEXT_PRIMARY),
+                                        .color(pal(ui).text_primary),
                                 )
-                                .fill(BG_HOVER)
-                                .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
+                                .fill(pal(ui).bg_hover)
+                                .stroke(egui::Stroke::new(1.0_f32, pal(ui).border_subtle))
                                 .rounding(8.0),
                             )
                             .clicked()
                         {
+                            // Punto de deshacer antes de reescribir.
+                            let prev = self.snapshot_formal();
                             let mut k = 0;
                             for n in self
                                 .novedades
@@ -1785,11 +1934,50 @@ impl eframe::App for App {
                                 n.body_formal = llm::cleanup_offline(&n.body_raw);
                                 k += 1;
                             }
+                            if k > 0 {
+                                self.undo_formal =
+                                    Some(("Limpieza a todas".to_string(), prev));
+                            }
                             self.log(format!(
                                 "Limpieza sin conexión aplicada a {k} novedades."
                             ));
                         }
                     });
+                    // Deshacer de la última acción masiva: aparece cuando
+                    // hay punto de deshacer y ninguna formalización corre
+                    // (un resultado tardío no debe pisar lo restaurado).
+                    if !llm_running {
+                        if let Some((label, _)) = self.undo_formal.clone() {
+                            ui.horizontal(|ui| {
+                                if btn_tertiary(ui, &format!("Deshacer «{label}»")).clicked() {
+                                    self.undo_bulk_formalize();
+                                }
+                                ui.label(
+                                    egui::RichText::new("Restaura los textos formales anteriores.")
+                                        .size(12.0)
+                                        .color(pal(ui).text_muted),
+                                );
+                            });
+                            ui.add_space(4.0);
+                        }
+                    }
+                    // Progreso en línea, junto a la acción que lo disparó:
+                    // spinner + "X de Y" mientras la formalización masiva
+                    // corre (el aviso de la barra lateral se mantiene).
+                    if llm_running {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Formalizando con IA… {llm_done} de {} novedades. Puede seguir revisando mientras tanto.",
+                                    self.llm_batch_total
+                                ))
+                                .size(12.0)
+                                .color(pal(ui).accent),
+                            );
+                        });
+                        ui.add_space(4.0);
+                    }
                     ui.add_space(8.0);
 
                     // --- Lista de novedades ---
@@ -1798,7 +1986,7 @@ impl eframe::App for App {
                         ui.vertical_centered(|ui| {
                             ui.add_space(24.0);
                             ui.label(
-                                egui::RichText::new("Sin coincidencias").color(TEXT_SECONDARY),
+                                egui::RichText::new("Sin coincidencias").color(pal(ui).text_secondary),
                             );
                         });
                     } else {
@@ -1817,11 +2005,11 @@ impl eframe::App for App {
                             )
                         };
                         let resp = egui::Frame::none()
-                            .fill(if sel { *ACCENT_TINT } else { BG_CARD })
+                            .fill(if sel { pal(ui).accent_tint } else { pal(ui).bg_card })
                             .stroke(if sel {
-                                egui::Stroke::new(1.5_f32, *ACCENT_LINE)
+                                egui::Stroke::new(1.5_f32, pal(ui).accent_line)
                             } else {
-                                egui::Stroke::new(1.0_f32, BORDER_SUBTLE)
+                                egui::Stroke::new(1.0_f32, pal(ui).border_subtle)
                             })
                             .rounding(10.0)
                             .inner_margin(10.0)
@@ -1839,7 +2027,7 @@ impl eframe::App for App {
                                             ))
                                             .strong()
                                             .size(13.0)
-                                            .color(TEXT_PRIMARY),
+                                            .color(pal(ui).text_primary),
                                         );
                                         ui.add_space(3.0);
                                         ui.horizontal(|ui| {
@@ -1848,15 +2036,15 @@ impl eframe::App for App {
                                             }
                                             pill(ui, &format!("📷 {nphotos}"));
                                             if is_orphan {
-                                                pill_tint(ui, "huérfana", *WARN_TINT, WARNING);
+                                                pill_tint(ui, "huérfana", pal(ui).warn_tint, pal(ui).warning);
                                             }
                                             if !include {
                                                 pill(ui, "excluida");
                                             }
                                             if busy {
-                                                pill_tint(ui, "formalizando…", *ACCENT_TINT, ACCENT);
+                                                pill_tint(ui, "formalizando…", pal(ui).accent_tint, pal(ui).accent);
                                             } else if formalizado {
-                                                pill_tint(ui, "Formalizado", *SUCCESS_TINT, SUCCESS);
+                                                pill_tint(ui, "Formalizado", pal(ui).success_tint, pal(ui).success);
                                             }
                                         });
                                     });
@@ -1897,7 +2085,7 @@ impl eframe::App for App {
                                     self.novedades[idx].id
                                 ))
                                 .font(font_semibold(16.0))
-                                .color(TEXT_PRIMARY),
+                                .color(pal(ui).text_primary),
                             );
                             let mut inc = self.novedades[idx].include;
                             if ui
@@ -1916,7 +2104,7 @@ impl eframe::App for App {
                                 )
                             };
                             if self.novedades[idx].is_orphan {
-                                pill_tint(ui, "📷 Fotos huérfanas", *WARN_TINT, WARNING);
+                                pill_tint(ui, "📷 Fotos huérfanas", pal(ui).warn_tint, pal(ui).warning);
                             }
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -1926,7 +2114,7 @@ impl eframe::App for App {
                                     }
                                     ui.small(
                                         egui::RichText::new(format!("{sender}, {fecha_txt}"))
-                                            .color(TEXT_SECONDARY),
+                                            .color(pal(ui).text_secondary),
                                     );
                                 },
                             );
@@ -1970,7 +2158,10 @@ impl eframe::App for App {
                         ui.horizontal(|ui| {
                             let busy = self.llm_busy.contains(&self.novedades[idx].id);
                             let id = self.novedades[idx].id;
-                            let r1 = btn_primary(ui, "✨ Formalizar con IA");
+                            // Botones deshabilitados (visualmente) mientras
+                            // esta novedad se formaliza: antes parecían
+                            // activos y el clic no hacía nada.
+                            let r1 = btn_primary_enabled(ui, "Formalizar con IA", !busy);
                             if r1.clicked() && !busy {
                                 if self.cfg.api_key.trim().is_empty() {
                                     self.log("Sin API key: configure su key en Ajustes o use la limpieza sin conexión.".to_string());
@@ -1978,19 +2169,21 @@ impl eframe::App for App {
                                     self.provider_edit = self.cfg.provider.clone();
                                     self.model_edit = self.cfg.model.clone();
                                     self.output_dir_edit = self.cfg.output_dir.clone();
+                                    self.dark_mode_edit = self.cfg.dark_mode;
+                                    self.compact_view_edit = self.cfg.compact_view;
                                     self.show_settings = true;
                                 } else {
                                     self.spawn_formalize(vec![id], true);
                                 }
                             }
-                            let r2 = btn_secondary(ui, "Limpieza sin conexión");
+                            let r2 = btn_secondary_enabled(ui, "Limpieza sin conexión", !busy);
                             if r2.clicked() && !busy {
                                 self.spawn_formalize(vec![id], false);
                             }
                             if busy {
                                 ui.spinner();
                                 ui.label(
-                                    egui::RichText::new("formalizando…").color(TEXT_SECONDARY),
+                                    egui::RichText::new("formalizando…").color(pal(ui).text_secondary),
                                 );
                             }
                         });
@@ -2025,7 +2218,7 @@ impl eframe::App for App {
                                     videos.join(", ")
                                 ))
                                 .size(12.0)
-                                .color(TEXT_SECONDARY),
+                                .color(pal(ui).text_secondary),
                             );
                         }
                         egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -2043,7 +2236,7 @@ impl eframe::App for App {
                                     };
                                     ui.vertical(|ui| {
                                         egui::Frame::none()
-                                            .fill(BG_HOVER)
+                                            .fill(pal(ui).bg_hover)
                                             .rounding(8.0)
                                             .inner_margin(6.0)
                                             .show(ui, |ui| {
@@ -2066,7 +2259,7 @@ impl eframe::App for App {
                                         ui.small(
                                             egui::RichText::new(ph.clone())
                                                 .size(10.0)
-                                                .color(TEXT_SECONDARY),
+                                                .color(pal(ui).text_secondary),
                                         );
                                     });
                                 }
@@ -2085,7 +2278,7 @@ impl eframe::App for App {
                                     "Estas fotos no tenían texto asociado (posible mensaje borrado). Elija arriba la novedad de destino y muévalas.",
                                 )
                                 .size(12.0)
-                                .color(TEXT_SECONDARY),
+                                .color(pal(ui).text_secondary),
                             );
                             ui.add_space(4.0);
                             let targets: Vec<(usize, String)> = self
@@ -2110,7 +2303,7 @@ impl eframe::App for App {
                                         "No hay ninguna novedad de destino. Cree o incluya una novedad primero.",
                                     )
                                     .size(12.0)
-                                    .color(TEXT_SECONDARY),
+                                    .color(pal(ui).text_secondary),
                                 );
                             } else {
                                 ui.horizontal(|ui| {
@@ -2169,7 +2362,7 @@ impl eframe::App for App {
         // ================= Ajustes =================
         if self.show_settings {
             let mut keep_open = true;
-            egui::Window::new("⚙ Ajustes")
+            egui::Window::new("Ajustes")
                 .id(egui::Id::new("settings_win"))
                 .collapsible(false)
                 .resizable(false)
@@ -2267,7 +2460,7 @@ impl eframe::App for App {
                                 egui::RichText::new(
                                     "Sin repositorio configurado: la búsqueda automática al iniciar está desactivada.",
                                 )
-                                .color(TEXT_MUTED),
+                                .color(pal(ui).text_muted),
                             );
                         }
                         ui.checkbox(
@@ -2293,6 +2486,16 @@ impl eframe::App for App {
                         if self.update_busy {
                             ui.spinner();
                         }
+                        ui.add_space(10.0);
+                        overline(ui, "Apariencia");
+                        section_title(ui, "Tema y densidad");
+                        ui.checkbox(&mut self.dark_mode_edit, "Modo oscuro");
+                        ui.small("Para trabajar de noche: fondo oscuro, mismo azul institucional.");
+                        ui.checkbox(
+                            &mut self.compact_view_edit,
+                            "Vista compacta (menos espacio, más novedades en pantalla)",
+                        );
+                        ui.small("Atajos: Ctrl+O cargar .zip · Ctrl+G generar · Ctrl+F buscar.");
                     });
                     ui.add_space(8.0);
                     ui.separator();
@@ -2306,6 +2509,19 @@ impl eframe::App for App {
                             self.cfg.anonymize = self.anonymize_edit;
                             self.cfg.update_repository = self.update_repository_edit.clone();
                             self.cfg.check_updates_on_startup = self.check_updates_on_startup_edit;
+                            // Apariencia: aplicar de inmediato (tema y
+                            // densidad) y persistir en la configuración.
+                            let theme_changed = self.cfg.dark_mode != self.dark_mode_edit
+                                || self.cfg.compact_view != self.compact_view_edit;
+                            self.cfg.dark_mode = self.dark_mode_edit;
+                            self.cfg.compact_view = self.compact_view_edit;
+                            if theme_changed {
+                                apply_theme(
+                                    ui.ctx(),
+                                    self.cfg.dark_mode,
+                                    self.cfg.compact_view,
+                                );
+                            }
                             match history::save_config(&self.cfg) {
                                 Ok(()) => self.log("Ajustes guardados.".to_string()),
                                 Err(e) => {
@@ -2325,7 +2541,7 @@ impl eframe::App for App {
         // ================= Registro =================
         if self.show_log {
             let mut open = true;
-            egui::Window::new("📝 Registro de actividad")
+            egui::Window::new("Registro de actividad")
                 .id(egui::Id::new("log_win"))
                 .open(&mut open)
                 .default_width(580.0)
@@ -2334,7 +2550,7 @@ impl eframe::App for App {
                         ui.label(
                             egui::RichText::new(format!("{} línea(s)", self.log.len()))
                                 .size(12.0)
-                                .color(TEXT_SECONDARY),
+                                .color(pal(ui).text_secondary),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if btn_tertiary(ui, "Limpiar registro").clicked() {
@@ -2358,7 +2574,7 @@ impl eframe::App for App {
         // ================= Historial de partes generados =================
         if self.show_history {
             let mut open = true;
-            egui::Window::new("🕘 Historial de partes")
+            egui::Window::new("Historial de partes")
                 .id(egui::Id::new("history_win"))
                 .open(&mut open)
                 .default_width(560.0)
@@ -2366,7 +2582,7 @@ impl eframe::App for App {
                     if self.hist.entries.is_empty() {
                         ui.label(
                             egui::RichText::new("Aún no hay partes generados.")
-                                .color(TEXT_SECONDARY),
+                                .color(pal(ui).text_secondary),
                         );
                     } else {
                         let mut entries = self.hist.entries.clone();
@@ -2383,7 +2599,7 @@ impl eframe::App for App {
                                                     e.report_start, e.report_end
                                                 ))
                                                 .strong()
-                                                .color(TEXT_PRIMARY),
+                                                .color(pal(ui).text_primary),
                                             );
                                             ui.label(
                                                 egui::RichText::new(format!(
@@ -2391,7 +2607,7 @@ impl eframe::App for App {
                                                     e.generated_at, e.novedades, e.zip_name
                                                 ))
                                                 .size(11.5)
-                                                .color(TEXT_SECONDARY),
+                                                .color(pal(ui).text_secondary),
                                             );
                                         });
                                         ui.with_layout(

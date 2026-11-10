@@ -167,14 +167,14 @@ impl App {
                 egui::RichText::new("Vista previa del documento")
                     .strong()
                     .size(15.0)
-                    .color(theme::TEXT_PRIMARY),
+                    .color(theme::pal(ui).text_primary),
             );
             ui.label(
                 egui::RichText::new(
                     "Se actualiza sola al editar las novedades. El documento final justifica el texto y usa el membrete de su plantilla .docx.",
                 )
                 .size(12.0)
-                .color(theme::TEXT_MUTED),
+                .color(theme::pal(ui).text_muted),
             );
             ui.add_space(12.0);
 
@@ -182,7 +182,7 @@ impl App {
             ui.vertical_centered(|ui| {
                 egui::Frame::none()
                     .fill(PAPER)
-                    .stroke(egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                    .stroke(egui::Stroke::new(1.0_f32, theme::pal(ui).border_subtle))
                     .rounding(6.0)
                     .inner_margin(egui::Margin::same(34.0))
                     .show(ui, |ui| {

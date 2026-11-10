@@ -70,6 +70,13 @@ pub struct Config {
     pub update_repository: String,
     #[serde(default = "default_true")]
     pub check_updates_on_startup: bool,
+    /// Tema oscuro (UI/UX Pro Max: variantes claro/oscuro juntas). Por
+    /// defecto claro (diseño institucional aprobado).
+    #[serde(default)]
+    pub dark_mode: bool,
+    /// Vista compacta: menos espaciado, más novedades visibles en la lista.
+    #[serde(default)]
+    pub compact_view: bool,
 }
 
 impl Default for Config {
@@ -83,6 +90,8 @@ impl Default for Config {
             anonymize: true,
             update_repository: default_update_repository(),
             check_updates_on_startup: true,
+            dark_mode: false,
+            compact_view: false,
         }
     }
 }

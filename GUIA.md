@@ -73,9 +73,15 @@ encabezados y fotos a la izquierda, narrativa a la derecha).
 La app le avisa cuántas tablas viejas eliminó.
 
 ### Paso 4 — Revisar las novedades (revisión asistida)
-En la barra superior, el **indicador de pasos** (ZIP → Plantilla → Revisar →
-Formalizar → Fechas → Generar) muestra en qué punto del flujo está: pasos
-hechos en verde, el actual en dorado y los pendientes en gris.
+En la parte superior, el **indicador de pasos** (Cargar → Analizar →
+Extraer → Generar → Editar → Exportar) muestra en qué punto del flujo
+está: pasos hechos y el actual en azul, los pendientes en gris. Los pasos
+hechos y el actual son **clicables**: pulse uno para volver a ese punto
+del flujo (por ejemplo, "Editar" abre la vista previa y "Exportar" abre
+el .docx generado).
+
+Busque novedades con el campo **Buscar** (busca en el texto original, en
+el texto formal y en los encabezados, o por #número).
 
 En la lista izquierda: marque/desmarque con el checkbox qué novedades entran
 al reporte. Al seleccionar una verá:
@@ -93,20 +99,25 @@ administrativos simplemente desmarcándolos: nada se filtra sin que usted
 lo vea.
 
 ### Paso 5 — Formalizar el texto
-Por novedad: **✨ Formalizar con IA** (requiere API key, ver §5) o
-**🧹 Limpieza sin conexión** (reglas seguras, sin internet).
+Por novedad: **Formalizar con IA** (requiere API key, ver §5) o
+**Limpieza sin conexión** (reglas seguras, sin internet).
 También puede **formalizar todas** de una vez. El texto generado **siempre**
 se muestra para su revisión y edición manual antes de generar el documento.
+Mientras la IA trabaja, el botón se deshabilita y se muestra el progreso
+("Formalizando… X de Y").
+
+Si una formalización masiva no le convence, use **Deshacer** (restaura los
+textos formales anteriores).
 
 > La redacción formal **preserva exactamente** nombres, cédulas, placas,
 > teléfonos, horas, montos y lugares. No inventa ni elimina datos.
 
 ### Paso 5.5 — Vista previa del documento (antes de generar)
-En el panel central, cambie a **👁 Vista previa** para ver el Parte Diario
+En el panel central, cambie a **Vista previa** para ver el Parte Diario
 tal como quedará: fecha, rango del asunto y cada novedad incluida con sus
 encabezados, fotos y texto formal (las que aún no se formalizaron llevan la
 marca "SIN FORMALIZAR"). La vista previa se actualiza sola al editar
-cualquier novedad; vuelva a **✏️ Editar** para seguir trabajando.
+cualquier novedad; vuelva a **Editar** para seguir trabajando.
 
 ### Paso 6 — Generar
 Ajuste el rango de fechas si hace falta y pulse **3. Generar Parte Diario**.
@@ -218,3 +229,18 @@ parte-diario/
 - Imágenes: `<w:drawing>` + relación en `word/_rels/document.xml.rels` +
   `Override` en `[Content_Types].xml`; ancho 2.36", alto máximo 3.15".
 - Los videos se excluyen del documento pero nunca rompen el parseo.
+
+## 9. Apariencia y atajos (v2.2.0)
+
+En **Ajustes → Apariencia**:
+
+- **Modo oscuro**: fondo oscuro para trabajar de noche, con el mismo azul
+  institucional y el dorado solo para Generar.
+- **Vista compacta**: menos espacio entre elementos, más novedades visibles
+  en la lista.
+
+Atajos de teclado (no funcionan mientras escribe en un campo de texto):
+
+- **Ctrl+O**: cargar el .zip de WhatsApp.
+- **Ctrl+G**: generar el Parte Diario.
+- **Ctrl+F**: buscar en las novedades.

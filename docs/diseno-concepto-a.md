@@ -24,7 +24,8 @@ disciplinado y operativo. No es un dashboard SaaS ni una app de consumo.
 | Dorado | `#C9A86A` | ÚNICAMENTE el botón "Generar Parte Diario" |
 
 Secundarios (solo semántica, nunca decoración): texto secundario `#4A5568`,
-atenuado `#7A8699`, borde sutil `#D5DCE8`, éxito `#1E7A4C`, aviso `#9A6B0F`,
+atenuado `#5A6577` (5.89:1 sobre blanco; el `#7A8699` anterior medía 3.41:1,
+por debajo del mínimo WCAG AA 4.5:1), borde sutil `#D5DCE8`, éxito `#1E7A4C`, aviso `#9A6B0F`,
 error `#B3261E`. Sin degradados, sin sombras suaves, sin terracota.
 
 ## Tipo (una sola familia: Inter)
@@ -117,3 +118,40 @@ como un documento oficial; solo la invitación del estado vacío va centrada.
 - **Versión "v2.0.1 · hash" fuera de la barra lateral → barra de estado.**
   La cabecera de la barra lateral tenía cuatro renglones de texto; la
   versión vive mejor callada abajo, junto al registro.
+
+## Mejoras v2.2.0 (10-11-2026, con la skill UI/UX Pro Max)
+
+- **Contraste del texto atenuado.** `#7A8699` → `#5A6577` (5.89:1 sobre
+  blanco, 5.45:1 sobre el panel; mínimo WCAG AA 4.5:1). El resto de la
+  paleta ya cumplía.
+- **Sin emoji en la interfaz.** Los botones y la navegación llevaban emoji
+  (📂, ✨, ⚡, 👁, ✏️, 🕘, ⚙, 📝); la skill los prohíbe como iconos y dos de
+  ellos (👁, ✏️) ni siquiera los cubre ninguna fuente del stack. Ahora son
+  solo texto. Los avisos conservan ⚠ / ℹ (símbolos tipográficos, no emoji:
+  el estado nunca se comunica solo con color).
+- **Stepper clicable.** Los pasos hechos y el actual navegan atrás
+  (Cargar abre el selector del .zip; Analizar va a la lista; Extraer va a
+  la siguiente novedad sin formalizar; Generar actúa como el botón dorado;
+  Editar abre la vista previa; Exportar abre el .docx). Los pendientes no
+  se pueden saltar. Cursor de mano + halo al pasar sobre un paso clicable.
+- **Deshacer la formalización masiva.** "Formalizar todas con IA" y
+  "Limpieza a todas" guardan los textos formales previos; aparece
+  "Deshacer" hasta que se haga otra acción masiva o se cargue otro .zip.
+- **Indicador de carga junto a la acción.** Los botones de formalizar se
+  deshabilitan (visualmente) mientras corren y el progreso ("Formalizando…
+  X de Y") se muestra junto a ellos, no solo en la barra lateral.
+- **Confirmación de éxito.** El aviso de "Parte Diario generado" ahora
+  lleva la marca ✓ dibujada (igual que el stepper) y el nombre del archivo
+  generado.
+- **Búsqueda en el texto formal.** El filtro ya buscaba en el texto
+  original y los encabezados; ahora también busca en el texto formal.
+- **Modo oscuro (Ajustes → Apariencia).** Paleta oscura propia
+  (`Palette::dark` en `gui/theme.rs`): panel `#14181F`, tarjeta `#1D232E`,
+  texto `#E8ECF1` / `#AEB8C6` / `#8B96A5` (13.29 / 7.86 / 5.26:1), acento
+  `#2E6CB5` (blanco sobre él 5.35:1), mismo dorado para Generar. Los colores
+  viven en una `Palette` que se lee del `Context`, no en constantes, para
+  poder cambiar de tema en caliente. El tema del OS sigue sin mandar.
+- **Vista compacta (Ajustes → Apariencia).** Espaciado 8 → 4 px y botones
+  más bajos; más novedades visibles en la lista.
+- **Atajos de teclado.** Ctrl+O cargar .zip, Ctrl+G generar, Ctrl+F buscar
+  (no se disparan mientras se escribe en un campo de texto).
