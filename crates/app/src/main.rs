@@ -19,7 +19,8 @@ fn window_icon() -> Option<egui::IconData> {
 fn main() -> eframe::Result<()> {
     let _log_guard = parte_diario_config::logging::init_logging();
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([1280.0, 800.0])
+        .with_inner_size([1400.0, 880.0])
+        .with_min_inner_size([1150.0, 680.0])
         .with_title("Parte Diario — Anti-Ruidos y Contaminación Sónica, P.N.");
     if let Some(icon) = window_icon() {
         viewport = viewport.with_icon(icon);

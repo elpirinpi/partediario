@@ -1,18 +1,21 @@
-//! Interfaz de escritorio (egui/eframe) — dark mode profesional.
+//! Interfaz de escritorio (egui/eframe) — rediseño v3, Concepto A "Esencial".
 //!
-//! Flujo guiado (todo visible en pantalla, sin manual):
-//! 1. "Cargar .zip de WhatsApp" (botón o arrastrar el archivo a la ventana).
-//! 2. "Cargar plantilla .docx" con membrete institucional.
-//! 3. Revisar/editar novedades en el panel lateral (tarjetas con insignias).
-//! 4. Formalizar con IA o con limpieza sin conexión.
-//! 5. Verificar rango de fechas (autocompletado).
-//! 6. "Generar Parte Diario" → .docx validado + botón para abrirlo.
+//! Tres columnas, sin banda superior:
+//! - Barra lateral (200 px): marca "PD", navegación y "Turno de hoy".
+//! - Centro: stepper Cargar → Analizar → Extraer → Generar → Editar →
+//!   Exportar; estado vacío con zona de arrastre, o novedades + editor, o
+//!   vista previa del documento.
+//! - Inspector derecho "Resumen" (252 px): estado, fechas, mini vista
+//!   previa y el botón dorado "Generar Parte Diario".
 //!
-//! Principios de diseño (Material Design dark + GitHub/Google dark):
-//! - Nada de negro/blanco puro; elevación por aclarar superficies.
-//! - Acento desaturado claro; texto en 3 niveles de énfasis.
-//! - UNA acción primaria por región; insignias semánticas suavizadas.
+//! El sistema de diseño vive en `gui/theme.rs` (tokens y criterio en
+//! `docs/diseno-concepto-a.md`) y la vista previa en `gui/preview.rs`;
+//! este archivo guarda la lógica de la app.
 
+mod preview;
+mod theme;
+
+use self::theme::*;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
@@ -27,6 +30,15 @@ use parte_diario_config as history;
 use parte_diario_docx as docx_editor;
 use parte_diario_parser::grouping;
 use parte_diario_parser::parser;
+
+/// Vista del panel central.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewMode {
+    /// Editor de la novedad seleccionada.
+    Edit,
+    /// Vista previa del documento completo, antes de generar.
+    Preview,
+}
 
 pub struct App {
     cfg: history::Config,
@@ -77,26 +89,30 @@ pub struct App {
     filter: String,
     show_log: bool,
     alerts_expanded: bool,
-    brand_icon: Option<egui::TextureHandle>,
+    view: ViewMode,
+    /// El usuario ya abrió la vista previa (paso "Editar" del flujo).
+    preview_seen: bool,
+    /// El .docx generado ya se abrió (paso "Exportar" del flujo).
+    exported: bool,
+    /// Ventana del historial de partes generados.
+    show_history: bool,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Forzar SIEMPRE tema oscuro: egui 0.29 sigue el tema del sistema por
-        // defecto (Windows en modo claro ⇒ Visuals::light ⇒ paneles blancos
-        // mezclados con los widgets oscuros). Se aplica a AMBOS estilos para
-        // que ningún cambio de tema del OS pueda romper la interfaz.
-        cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
+        // Forzar SIEMPRE tema claro (Concepto A "Esencial"): egui 0.29 sigue
+        // el tema del sistema por defecto (Windows en modo oscuro ⇒
+        // Visuals::dark ⇒ paneles oscuros mezclados con los widgets claros).
+        // Se aplica a AMBOS estilos para que ningún cambio de tema del OS
+        // pueda romper la interfaz.
+        cc.egui_ctx.set_theme(egui::ThemePreference::Light);
+        // Inter (Regular / SemiBold / Bold) desde assets/fonts/.
+        theme::install_fonts(&cc.egui_ctx);
         let visuals = app_visuals();
         cc.egui_ctx
             .set_visuals_of(egui::Theme::Dark, visuals.clone());
         cc.egui_ctx.set_visuals_of(egui::Theme::Light, visuals);
-        cc.egui_ctx.all_styles_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-            style.spacing.button_padding = egui::vec2(14.0, 10.0);
-            style.spacing.indent = 16.0;
-            style.spacing.interact_size = egui::vec2(32.0, 28.0); // botones grandes, fátiga cero
-        });
+        cc.egui_ctx.all_styles_mut(theme::apply_style);
         let cfg = history::load_config();
         let hist = history::load_history();
         let template_path = if cfg.last_template.is_empty() {
@@ -151,7 +167,10 @@ impl App {
             filter: String::new(),
             show_log: false,
             alerts_expanded: false,
-            brand_icon: Self::load_brand_icon(&cc.egui_ctx),
+            view: ViewMode::Edit,
+            preview_seen: false,
+            exported: false,
+            show_history: false,
         };
         if auto_check {
             app.start_update_check(&cc.egui_ctx);
@@ -281,28 +300,6 @@ impl App {
             let _ = tx.send(result);
             ctx.request_repaint();
         });
-    }
-
-    /// Logo real de la app (assets/icono-parte-diario.png) embebido en el
-    /// binario, reescalado a 64px para la marca de la barra superior.
-    fn load_brand_icon(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-        let bytes = include_bytes!("../../../assets/icono-parte-diario.png");
-        let img = image::load_from_memory(bytes).ok()?.resize_exact(
-            64,
-            64,
-            image::imageops::FilterType::Lanczos3,
-        );
-        let rgba = img.to_rgba8();
-        let (w, h) = (rgba.width() as usize, rgba.height() as usize);
-        let pixels = rgba
-            .pixels()
-            .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
-            .collect();
-        let ci = egui::ColorImage {
-            size: [w, h],
-            pixels,
-        };
-        Some(ctx.load_texture("brand-icon", ci, egui::TextureOptions::LINEAR))
     }
 
     fn log(&mut self, s: impl Into<String>) {
@@ -524,7 +521,7 @@ impl App {
         self.txt_hash = txt_hash.clone();
         if let Some(prev) = history::already_processed(&self.hist, &zip_hash, &txt_hash) {
             self.warnings.push(format!(
-                "¡ATENCIÓN! Este .zip (o su contenido de texto) YA fue procesado el {} y generó el reporte {} → {} ({} novedades). \
+                "¡ATENCIÓN! Este .zip (o su contenido de texto) ya fue procesado el {} y generó el reporte {} a {} ({} novedades). \
                  Si lo regenera, verifique que no esté duplicando trabajo por confusión de nombres de archivo.",
                 prev.generated_at, prev.report_start, prev.report_end, prev.novedades
             ));
@@ -850,7 +847,7 @@ impl App {
                 self.replace_range = (start_s.clone(), end_s.clone());
                 let prev_path = prev.output_path.clone();
                 self.warnings.push(format!(
-                    "GENERAR: ya existe un reporte para {} → {} ({}). Si el contenido anterior era incorrecto, pulse GENERAR otra vez para REEMPLAZARLO (se sobrescribirá: {}).",
+                    "Generar: ya existe un reporte para {} a {} ({}). Si el contenido anterior era incorrecto, pulse Generar otra vez para reemplazarlo (se sobrescribirá: {}).",
                     start_s, end_s, prev.generated_at, prev_path
                 ));
                 return;
@@ -908,7 +905,7 @@ impl App {
                     self.warnings.push(format!("DOCX: {w}"));
                 }
                 self.log(format!(
-                    "✓ Parte Diario generado: {} ({} novedades, {} fotos incrustadas). Validación OOXML interna superada.",
+                    "Parte Diario generado: {} ({} novedades, {} fotos incrustadas). Validación OOXML interna superada.",
                     out_path.display(),
                     res.novedades_incluidas,
                     res.images_embedded
@@ -1004,9 +1001,9 @@ impl App {
         };
         let fecha = n
             .fecha_mencionada
-            .map(|d| format!(" · {}", d.format("%d/%m")))
+            .map(|d| format!(", {}", d.format("%d/%m")))
             .unwrap_or_default();
-        format!("{}{} · 📷{}", base, fecha, n.photos.len())
+        format!("{}{}, 📷{}", base, fecha, n.photos.len())
     }
 
     /// Extracto corto para la tarjeta de la lista (sin insignias redundantes).
@@ -1029,6 +1026,51 @@ impl App {
         }
     }
 
+    /// Estado de los 6 pasos del flujo guiado, para el indicador de pasos
+    /// de la barra superior.
+    /// Estado de los 6 pasos del flujo (Concepto A).
+    ///
+    /// Mapeo a los pasos reales de la app:
+    /// - Cargar: .zip del chat cargado.
+    /// - Analizar: hay novedades para revisar.
+    /// - Extraer: las novedades incluidas ya están formalizadas.
+    /// - Generar: el .docx ya se generó.
+    /// - Editar: el usuario ya abrió la vista previa del documento.
+    /// - Exportar: el .docx generado ya se abrió.
+    fn step_states(&self) -> [(String, StepState); 6] {
+        let zip_ok = self.zip_path.is_some();
+        let rev_ok = !self.novedades.is_empty();
+        let form_ok = {
+            let pendientes: Vec<&grouping::Novedad> = self
+                .novedades
+                .iter()
+                .filter(|n| n.include && !n.body_raw.trim().is_empty())
+                .collect();
+            !pendientes.is_empty()
+                && pendientes
+                    .iter()
+                    .all(|n| !n.body_formal.trim().is_empty())
+        };
+        let gen_ok = self.generated_path.is_some();
+        let edit_ok = self.preview_seen;
+        let exp_ok = self.exported;
+        let done = [zip_ok, rev_ok, form_ok, gen_ok, edit_ok, exp_ok];
+        let current = done.iter().position(|d| !*d).unwrap_or(6);
+        let labels = [
+            "Cargar", "Analizar", "Extraer", "Generar", "Editar", "Exportar",
+        ];
+        std::array::from_fn(|i| {
+            let state = if done[i] {
+                StepState::Done
+            } else if i == current {
+                StepState::Current
+            } else {
+                StepState::Pending
+            };
+            (labels[i].to_string(), state)
+        })
+    }
+
     /// Lista de índices visibles según el filtro de búsqueda.
     fn visible_novedades(&self) -> Vec<usize> {
         let q = self.filter.trim().to_lowercase();
@@ -1044,6 +1086,20 @@ impl App {
                     || n.headers.join(" ").to_lowercase().contains(&q)
             })
             .collect()
+    }
+}
+
+/// Nombre corto del modelo de IA para el inspector (p. ej.
+/// "nemotron-3-ultra-550b-a55b:free" desde
+/// "nvidia/nemotron-3-ultra-550b-a55b:free").
+fn short_model(m: &str) -> String {
+    let m = m.trim();
+    let short = m.rsplit('/').next().unwrap_or(m);
+    let chars: Vec<char> = short.chars().collect();
+    if chars.len() > 30 {
+        chars[..27].iter().collect::<String>() + "…"
+    } else {
+        short.to_string()
     }
 }
 
@@ -1070,198 +1126,6 @@ fn parse_fecha(s: &str) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(y, m, d)
 }
 
-// ==================== Sistema de diseño (dark theme) ====================
-// Principios (Material Design dark + GitHub/Google dark):
-// - Nada de negro puro ni blanco puro: grises oscuros y off-white.
-// - La elevación se comunica ACLARANDO superficies, no con sombras.
-// - Acento desaturado y claro (#8AB4F8): los saturados "vibran" en dark.
-// - Texto en 3 niveles de énfasis (87% / 60% / 40%), nunca plano.
-// - Semánticos suavizados para fondo oscuro.
-
-// --- Superficies (nivel de elevación) ---
-const BG_BASE: egui::Color32 = egui::Color32::from_rgb(0x13, 0x13, 0x16); // nivel 0
-const BG_CARD: egui::Color32 = egui::Color32::from_rgb(0x1B, 0x1C, 0x1F); // nivel 1: tarjetas
-const BG_OVERLAY: egui::Color32 = egui::Color32::from_rgb(0x23, 0x24, 0x28); // nivel 2: diálogos/menús
-const BG_HOVER: egui::Color32 = egui::Color32::from_rgb(0x26, 0x27, 0x2C);
-const BG_ACTIVE: egui::Color32 = egui::Color32::from_rgb(0x2E, 0x2F, 0x34);
-const BG_INSET: egui::Color32 = egui::Color32::from_rgb(0x0E, 0x0E, 0x10); // campos (hundido)
-const BORDER_SUBTLE: egui::Color32 = egui::Color32::from_rgb(0x2A, 0x2B, 0x30);
-
-// --- Texto (jerarquía por énfasis) ---
-const TEXT_PRIMARY: egui::Color32 = egui::Color32::from_rgb(0xE4, 0xE4, 0xE7); // 87%
-const TEXT_SECONDARY: egui::Color32 = egui::Color32::from_rgb(0xA1, 0xA1, 0xAA); // 60%
-const TEXT_MUTED: egui::Color32 = egui::Color32::from_rgb(0x63, 0x63, 0x6B); // ~40%
-
-// --- Acento desaturado (el saturado vibra en dark) ---
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x8A, 0xB4, 0xF8);
-const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(0x0B, 0x12, 0x20); // texto oscuro sobre acento
-
-// --- Semánticos suavizados para dark ---
-const SUCCESS: egui::Color32 = egui::Color32::from_rgb(0x81, 0xC9, 0x95);
-const WARNING: egui::Color32 = egui::Color32::from_rgb(0xFD, 0xD6, 0x63);
-
-static ACCENT_TINT: std::sync::LazyLock<egui::Color32> =
-    std::sync::LazyLock::new(|| egui::Color32::from_rgba_unmultiplied(0x8A, 0xB4, 0xF8, 30));
-static ACCENT_LINE: std::sync::LazyLock<egui::Color32> =
-    std::sync::LazyLock::new(|| egui::Color32::from_rgba_unmultiplied(0x8A, 0xB4, 0xF8, 110));
-static WARN_TINT: std::sync::LazyLock<egui::Color32> =
-    std::sync::LazyLock::new(|| egui::Color32::from_rgba_unmultiplied(0xFD, 0xD6, 0x63, 22));
-static WARN_LINE: std::sync::LazyLock<egui::Color32> =
-    std::sync::LazyLock::new(|| egui::Color32::from_rgba_unmultiplied(0xFD, 0xD6, 0x63, 90));
-static INFO_TINT: std::sync::LazyLock<egui::Color32> =
-    std::sync::LazyLock::new(|| egui::Color32::from_rgba_unmultiplied(0x8A, 0xB4, 0xF8, 22));
-static SUCCESS_TINT: std::sync::LazyLock<egui::Color32> =
-    std::sync::LazyLock::new(|| egui::Color32::from_rgba_unmultiplied(0x81, 0xC9, 0x95, 26));
-static SUCCESS_LINE: std::sync::LazyLock<egui::Color32> =
-    std::sync::LazyLock::new(|| egui::Color32::from_rgba_unmultiplied(0x81, 0xC9, 0x95, 100));
-
-fn app_visuals() -> egui::Visuals {
-    let mut v = egui::Visuals::dark();
-    v.panel_fill = BG_BASE;
-    v.extreme_bg_color = BG_INSET;
-    v.window_fill = BG_OVERLAY;
-    v.faint_bg_color = BG_HOVER;
-    v.code_bg_color = BG_INSET;
-    v.warn_fg_color = WARNING;
-    v.error_fg_color = egui::Color32::from_rgb(0xF2, 0x8B, 0x82);
-    v.hyperlink_color = ACCENT;
-
-    let r = egui::Rounding::same(8.0);
-    v.widgets.noninteractive.rounding = r;
-    v.widgets.noninteractive.bg_fill = egui::Color32::TRANSPARENT;
-    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, TEXT_PRIMARY);
-    v.widgets.inactive.rounding = r;
-    v.widgets.inactive.bg_fill = BG_HOVER;
-    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, TEXT_PRIMARY);
-    v.widgets.hovered.rounding = r;
-    v.widgets.hovered.bg_fill = BG_ACTIVE;
-    v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, TEXT_PRIMARY);
-    v.widgets.active.rounding = r;
-    v.widgets.active.bg_fill = *ACCENT_TINT;
-    v.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, ACCENT);
-    v.widgets.open.rounding = r;
-    v.selection.bg_fill = *ACCENT_TINT;
-    v.selection.stroke = egui::Stroke::new(1.0_f32, *ACCENT_LINE);
-    v.window_rounding = egui::Rounding::same(12.0);
-    v.menu_rounding = egui::Rounding::same(8.0);
-    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, BORDER_SUBTLE);
-    v
-}
-
-/// Botón primario: UNA sola acción principal por vista. Relleno de acento
-/// desaturado con texto oscuro (alto contraste sin neón).
-fn btn_primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).strong().color(ON_ACCENT))
-            .fill(ACCENT)
-            .rounding(8.0),
-    )
-}
-
-/// Botón secundario: superficie sutil + borde fino, para acciones de apoyo.
-fn btn_secondary(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).color(TEXT_PRIMARY))
-            .fill(BG_HOVER)
-            .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
-            .rounding(8.0),
-    )
-}
-
-/// Botón terciario: solo texto, para acciones de baja prioridad.
-fn btn_tertiary(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).color(TEXT_SECONDARY))
-            .fill(egui::Color32::TRANSPARENT)
-            .rounding(8.0),
-    )
-}
-
-/// Insignia neutra pequeña (texto secundario, nada de blanco sobre neón).
-fn pill(ui: &mut egui::Ui, text: &str) {
-    egui::Frame::none()
-        .fill(BG_HOVER)
-        .rounding(10.0)
-        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(text).size(11.0).color(TEXT_SECONDARY));
-        });
-}
-
-/// Insignia semántica con tinte suave (ej. "huérfana", "formalizado").
-fn pill_tint(ui: &mut egui::Ui, text: &str, tint: egui::Color32, fg: egui::Color32) {
-    egui::Frame::none()
-        .fill(tint)
-        .rounding(10.0)
-        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(text).size(11.0).color(fg));
-        });
-}
-
-/// Banda de aviso: tinte suave + borde tenue del color semántico.
-fn banner(ui: &mut egui::Ui, text: &str, tint: egui::Color32, line: egui::Color32) {
-    egui::Frame::none()
-        .fill(tint)
-        .stroke(egui::Stroke::new(1.0_f32, line))
-        .rounding(8.0)
-        .inner_margin(10.0)
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(text).size(12.5).color(TEXT_PRIMARY));
-        });
-    ui.add_space(6.0);
-}
-
-/// Tarjeta de nivel 1: superficie elevada + borde sutil.
-fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    egui::Frame::none()
-        .fill(BG_CARD)
-        .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
-        .rounding(12.0)
-        .inner_margin(14.0)
-        .show(ui, |ui| add(ui))
-        .inner
-}
-
-/// Etiqueta superior de sección (overline): 11px, secundaria, mayúsculas.
-fn overline(ui: &mut egui::Ui, text: &str) {
-    ui.label(
-        egui::RichText::new(text.to_uppercase())
-            .size(10.5)
-            .color(TEXT_MUTED),
-    );
-    ui.add_space(2.0);
-}
-
-/// Título de sección dentro de una tarjeta.
-fn section_title(ui: &mut egui::Ui, title: &str) {
-    ui.label(
-        egui::RichText::new(title)
-            .strong()
-            .size(13.5)
-            .color(TEXT_PRIMARY),
-    );
-    ui.add_space(4.0);
-}
-
-/// Celda de estado "checklist" de la barra superior: etiqueta + valor con
-/// ✓ (listo) o ⋯ (pendiente) para que el usuario sepa qué falta de un vistazo.
-fn checklist_cell(ui: &mut egui::Ui, label: &str, value: &str, ready: bool) {
-    ui.vertical(|ui| {
-        ui.horizontal(|ui| {
-            let mark = if ready { "✓" } else { "⋯" };
-            let col = if ready { SUCCESS } else { TEXT_MUTED };
-            ui.label(egui::RichText::new(mark).size(12.0).strong().color(col));
-            ui.label(egui::RichText::new(label).size(10.5).color(TEXT_MUTED));
-        });
-        ui.label(egui::RichText::new(value).size(12.0).color(if ready {
-            TEXT_PRIMARY
-        } else {
-            TEXT_SECONDARY
-        }));
-    });
-}
-
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_llm();
@@ -1278,15 +1142,19 @@ impl eframe::App for App {
             painter.rect_filled(
                 rect,
                 0.0,
-                egui::Color32::from_rgba_unmultiplied(0x0B, 0x12, 0x20, 210),
+                egui::Color32::from_rgba_unmultiplied(0x1B, 0x3A, 0x6B, 220),
             );
-            painter.rect_stroke(rect.shrink(24.0), 12.0, egui::Stroke::new(2.0_f32, ACCENT));
+            painter.rect_stroke(
+                rect.shrink(24.0),
+                12.0,
+                egui::Stroke::new(2.0_f32, egui::Color32::WHITE),
+            );
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Suelte el archivo aquí\n(.zip del chat de WhatsApp o plantilla .docx)",
                 egui::FontId::proportional(20.0),
-                TEXT_PRIMARY,
+                egui::Color32::WHITE,
             );
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
@@ -1335,262 +1203,6 @@ impl eframe::App for App {
                 });
         }
 
-        // ================= Barra superior =================
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                // Marca: cuadrado de acento tenue con el logo real de la app.
-                egui::Frame::none()
-                    .fill(*ACCENT_TINT)
-                    .stroke(egui::Stroke::new(1.0_f32, *ACCENT_LINE))
-                    .rounding(10.0)
-                    .inner_margin(egui::Margin::symmetric(7.0, 6.0))
-                    .show(ui, |ui| {
-                        if let Some(icon) = &self.brand_icon {
-                            ui.add(
-                                egui::Image::new(icon)
-                                    .fit_to_exact_size(egui::vec2(26.0, 26.0))
-                                    .rounding(6.0),
-                            );
-                        } else {
-                            ui.label(egui::RichText::new("📋").size(20.0));
-                        }
-                    });
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new("Parte Diario")
-                            .size(17.0)
-                            .strong()
-                            .color(TEXT_PRIMARY),
-                    );
-                    ui.label(
-                        egui::RichText::new("Anti-Ruidos y Contaminación Sónica · P.N.")
-                            .size(11.0)
-                            .color(TEXT_MUTED),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "v{} · {}",
-                            parte_diario_core::build_info::VERSION,
-                            parte_diario_core::build_info::GIT_HASH
-                        ))
-                        .size(9.5)
-                        .color(TEXT_MUTED),
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Chips de avisos (colapsados por defecto: no roban espacio).
-                    let (nw, ni) = (self.warnings.len(), self.info.len());
-                    if nw + ni > 0 {
-                        let (tint, line, txt) = if self.warnings.is_empty() {
-                            (
-                                *INFO_TINT,
-                                *ACCENT_LINE,
-                                format!("ℹ {} nota{}", ni, if ni == 1 { "" } else { "s" }),
-                            )
-                        } else {
-                            (
-                                *WARN_TINT,
-                                *WARN_LINE,
-                                format!("⚠ {} aviso{}", nw, if nw == 1 { "" } else { "s" }),
-                            )
-                        };
-                        let chip = egui::Frame::none()
-                            .fill(tint)
-                            .stroke(egui::Stroke::new(1.0_f32, line))
-                            .rounding(10.0)
-                            .inner_margin(egui::Margin::symmetric(10.0, 5.0))
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new(txt).size(12.0).color(TEXT_PRIMARY));
-                            })
-                            .response
-                            .interact(egui::Sense::click());
-                        if chip.clicked() {
-                            self.alerts_expanded = !self.alerts_expanded;
-                        }
-                        chip.on_hover_text("Clic para ver u ocultar los avisos");
-                    }
-                    if btn_tertiary(ui, "⚙ Ajustes").clicked() {
-                        // Re-sincronizar edits con la config guardada al abrir.
-                        self.api_key_edit = self.cfg.api_key.clone();
-                        self.provider_edit = self.cfg.provider.clone();
-                        self.model_edit = self.cfg.model.clone();
-                        self.output_dir_edit = self.cfg.output_dir.clone();
-                        self.update_repository_edit = self.cfg.update_repository.clone();
-                        self.check_updates_on_startup_edit = self.cfg.check_updates_on_startup;
-                        self.show_settings = true;
-                    }
-                    if btn_secondary(ui, "📄 Plantilla").clicked() {
-                        self.pick_template();
-                    }
-                    if btn_secondary(ui, "📂 Cargar .zip").clicked() {
-                        self.pick_zip();
-                    }
-                });
-            });
-            ui.add_space(6.0);
-
-            // Fila de contexto: checklist de pasos + rango + generar
-            egui::Frame::none()
-                .fill(BG_CARD)
-                .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
-                .rounding(10.0)
-                .inner_margin(12.0)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let zip_name = self
-                            .zip_path
-                            .as_ref()
-                            .and_then(|p| p.file_name())
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "Sin cargar".to_string());
-                        checklist_cell(
-                            ui,
-                            "Chat",
-                            &truncate_middle(&zip_name, 28),
-                            self.zip_path.is_some(),
-                        );
-                        ui.separator();
-                        let tpl_name = self
-                            .template_path
-                            .as_ref()
-                            .and_then(|p| p.file_name())
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "Sin cargar".to_string());
-                        checklist_cell(
-                            ui,
-                            "Plantilla",
-                            &truncate_middle(&tpl_name, 28),
-                            self.template_path.is_some(),
-                        );
-                        ui.separator();
-                        ui.vertical(|ui| {
-                            overline(ui, "Rango (08:00 → 08:00)");
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.date_from)
-                                        .hint_text("10-10-2026")
-                                        .desired_width(90.0),
-                                );
-                                ui.label(egui::RichText::new("→").color(TEXT_SECONDARY));
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.date_to)
-                                        .hint_text("11-10-2026")
-                                        .desired_width(90.0),
-                                );
-                            });
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let missing: Vec<&str> = [
-                                (self.template_path.is_none(), "cargar la plantilla .docx"),
-                                (self.zip_path.is_none(), "cargar el .zip del chat"),
-                                (
-                                    parse_fecha(&self.date_from).is_none()
-                                        || parse_fecha(&self.date_to).is_none(),
-                                    "escribir un rango de fechas válido (DD-MM-AAAA)",
-                                ),
-                            ]
-                            .iter()
-                            .filter_map(|(bad, msg)| if *bad { Some(*msg) } else { None })
-                            .collect();
-                            let resp = btn_primary(ui, "⚡ Generar Parte Diario");
-                            let resp = if missing.is_empty() {
-                                resp
-                            } else {
-                                resp.on_hover_text(format!("Antes debe: {}.", missing.join("; ")))
-                            };
-                            if resp.clicked() {
-                                self.generate();
-                            }
-                            if let Some(gp) = self.generated_path.clone() {
-                                if btn_secondary(ui, "📂 Abrir .docx").clicked() {
-                                    if let Err(e) = open::that(&gp) {
-                                        self.log(format!("No se pudo abrir el archivo: {e}"));
-                                    }
-                                }
-                            }
-                        });
-                    });
-                });
-
-            // Mensaje de éxito tras generar (verde suave, con acción directa).
-            if let Some(msg) = self.success_msg.clone() {
-                ui.add_space(6.0);
-                egui::Frame::none()
-                    .fill(*SUCCESS_TINT)
-                    .stroke(egui::Stroke::new(1.0_f32, *SUCCESS_LINE))
-                    .rounding(8.0)
-                    .inner_margin(10.0)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!("✓ {msg}"))
-                                    .size(12.5)
-                                    .color(TEXT_PRIMARY),
-                            );
-                            if let Some(gp) = self.generated_path.clone() {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if btn_tertiary(ui, "✕").clicked() {
-                                            self.success_msg = None;
-                                        }
-                                        if btn_secondary(ui, "Abrir .docx").clicked() {
-                                            if let Err(e) = open::that(&gp) {
-                                                self.log(format!(
-                                                    "No se pudo abrir el archivo: {e}"
-                                                ));
-                                            }
-                                        }
-                                    },
-                                );
-                            }
-                        });
-                    });
-            }
-
-            // Avisos expandibles (colapsados por defecto).
-            if self.alerts_expanded && (!self.warnings.is_empty() || !self.info.is_empty()) {
-                ui.add_space(6.0);
-                egui::Frame::none()
-                    .fill(BG_CARD)
-                    .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
-                    .rounding(10.0)
-                    .inner_margin(10.0)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("Avisos y notas")
-                                    .strong()
-                                    .size(12.5)
-                                    .color(TEXT_PRIMARY),
-                            );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if btn_tertiary(ui, "Descartar todos").clicked() {
-                                        self.warnings.clear();
-                                        self.info.clear();
-                                        self.alerts_expanded = false;
-                                    }
-                                },
-                            );
-                        });
-                        ui.add_space(4.0);
-                        egui::ScrollArea::vertical()
-                            .max_height(140.0)
-                            .show(ui, |ui| {
-                                for w in &self.warnings {
-                                    banner(ui, &format!("⚠ {w}"), *WARN_TINT, *WARN_LINE);
-                                }
-                                for i in &self.info {
-                                    banner(ui, &format!("ℹ {i}"), *INFO_TINT, *ACCENT_LINE);
-                                }
-                            });
-                    });
-            }
-            ui.add_space(4.0);
-        });
-
         // ================= Barra de estado =================
         egui::TopBottomPanel::bottom("abajo").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -1603,13 +1215,23 @@ impl eframe::App for App {
                     .sum();
                 ui.label(
                     egui::RichText::new(format!(
-                        "{} novedades · {} incluidas · {} fotos",
+                        "{} novedades, {} incluidas, {} fotos",
                         self.novedades.len(),
                         n_inc,
                         n_fotos
                     ))
                     .size(12.0)
                     .color(TEXT_SECONDARY),
+                );
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "v{} ({})",
+                        parte_diario_core::build_info::VERSION,
+                        parte_diario_core::build_info::GIT_HASH
+                    ))
+                    .size(12.0)
+                    .color(TEXT_MUTED),
                 );
                 // Progreso de formalización en curso.
                 if !self.llm_busy.is_empty() {
@@ -1633,123 +1255,569 @@ impl eframe::App for App {
             });
         });
 
-        // ================= Lateral: novedades =================
-        egui::SidePanel::left("lista")
-            .resizable(true)
-            .default_width(360.0)
-            .min_width(280.0)
+        // ================= Barra lateral (200 px) =================
+        egui::SidePanel::left("sidebar")
+            .resizable(false)
+            .default_width(200.0)
             .show(ctx, |ui| {
+                // Marca "PD" + nombre de la app.
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("Novedades ({})", self.novedades.len()))
-                            .size(16.0)
-                            .strong(),
-                    );
-                });
-                ui.add_space(6.0);
-
-                // Búsqueda.
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.filter)
-                            .id_salt("search_field")
-                            .hint_text("Buscar por texto o #número…")
-                            .desired_width(f32::INFINITY),
-                    );
-                    if !self.filter.is_empty() && btn_tertiary(ui, "✕").clicked() {
-                        self.filter.clear();
-                    }
-                });
-                ui.add_space(6.0);
-
-                // Acciones masivas a ancho completo.
-                let bw = ui.available_width();
-                if ui
-                    .add_sized(
-                        [bw, 0.0],
-                        egui::Button::new(
-                            egui::RichText::new("✨ Formalizar TODAS con IA")
-                                .color(TEXT_PRIMARY),
-                        )
-                        .fill(BG_HOVER)
-                        .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
-                        .rounding(8.0),
-                    )
-                    .clicked()
-                {
-                    if self.cfg.api_key.trim().is_empty() {
-                        self.log("Sin API key: configure su key de OpenRouter (gratis) en Ajustes, o use la limpieza sin conexión.".to_string());
-                        self.api_key_edit = self.cfg.api_key.clone();
-                        self.provider_edit = self.cfg.provider.clone();
-                        self.model_edit = self.cfg.model.clone();
-                        self.output_dir_edit = self.cfg.output_dir.clone();
-                        self.show_settings = true;
-                    } else {
-                        let ids: Vec<usize> = self
-                            .novedades
-                            .iter()
-                            .filter(|n| n.include && !n.body_raw.trim().is_empty())
-                            .map(|n| n.id)
-                            .collect();
-                        self.spawn_formalize_many(ids);
-                    }
-                }
-                if ui
-                    .add_sized(
-                        [bw, 0.0],
-                        egui::Button::new(
-                            egui::RichText::new("🧹 Limpieza a TODAS (sin conexión)")
-                                .color(TEXT_PRIMARY),
-                        )
-                        .fill(BG_HOVER)
-                        .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
-                        .rounding(8.0),
-                    )
-                    .clicked()
-                {
-                    let mut k = 0;
-                    for n in self
-                        .novedades
-                        .iter_mut()
-                        .filter(|n| n.include && !n.body_raw.trim().is_empty())
-                    {
-                        n.body_formal = llm::cleanup_offline(&n.body_raw);
-                        k += 1;
-                    }
-                    self.log(format!(
-                        "Limpieza sin conexión aplicada a {k} novedades."
-                    ));
-                }
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if btn_tertiary(ui, "✓ Incluir todas").clicked() {
-                        for n in &mut self.novedades {
-                            n.include = true;
-                        }
-                    }
-                    if btn_tertiary(ui, "✗ Excluir todas").clicked() {
-                        for n in &mut self.novedades {
-                            n.include = false;
-                        }
-                    }
-                });
-                ui.separator();
-
-                let visible = self.visible_novedades();
-                if visible.is_empty() {
-                    ui.centered_and_justified(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(24.0);
+                    egui::Frame::none()
+                        .fill(ACCENT)
+                        .rounding(10.0)
+                        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                        .show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new("Sin coincidencias")
-                                    .color(TEXT_SECONDARY),
+                                egui::RichText::new("PD")
+                                    .font(font_bold(17.0))
+                                    .color(ON_ACCENT),
+                            );
+                        });
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("Parte Diario")
+                                .font(font_semibold(15.0))
+                                .color(TEXT_PRIMARY),
+                        );
+                        ui.label(
+                            egui::RichText::new("Anti-Ruidos y Contaminación Sónica")
+                                .size(11.0)
+                                .color(TEXT_MUTED),
+                        );
+                    });
+                });
+                ui.add_space(16.0);
+
+                // Navegación: acciones del flujo (no vistas separadas).
+                if ui.selectable_label(true, "+  Nuevo parte").clicked() {
+                    self.pick_zip();
+                }
+                if ui.selectable_label(false, "🕘  Historial").clicked() {
+                    self.show_history = true;
+                }
+                if ui.selectable_label(false, "📄  Plantillas").clicked() {
+                    self.pick_template();
+                }
+                if ui.selectable_label(false, "⚙  Ajustes").clicked() {
+                    self.api_key_edit = self.cfg.api_key.clone();
+                    self.provider_edit = self.cfg.provider.clone();
+                    self.model_edit = self.cfg.model.clone();
+                    self.output_dir_edit = self.cfg.output_dir.clone();
+                    self.update_repository_edit = self.cfg.update_repository.clone();
+                    self.check_updates_on_startup_edit = self.cfg.check_updates_on_startup;
+                    self.show_settings = true;
+                }
+                if ui.selectable_label(false, "✨  IA").clicked() {
+                    self.api_key_edit = self.cfg.api_key.clone();
+                    self.provider_edit = self.cfg.provider.clone();
+                    self.model_edit = self.cfg.model.clone();
+                    self.output_dir_edit = self.cfg.output_dir.clone();
+                    self.show_settings = true;
+                }
+
+                // Tarjeta oscura "Turno de hoy" al pie de la barra.
+                // (El layout bottom_up invierte el orden: el contenido de
+                // la tarjeta se fuerza a top_down para que el título quede
+                // arriba. La altura es fija para que la tarjeta sea
+                // compacta, como en el concepto A, en vez de estirarse
+                // hasta ocupar toda la barra.)
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 116.0),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| {
+                            egui::Frame::none()
+                                .fill(DEEP_BG)
+                                .rounding(12.0)
+                                .inner_margin(12.0)
+                                .show(ui, |ui| {
+                                    ui.with_layout(
+                                        egui::Layout::top_down(egui::Align::LEFT),
+                                        |ui| {
+                                            ui.label(
+                                                egui::RichText::new("Turno de hoy")
+                                                    .font(font_semibold(13.5))
+                                                    .color(DEEP_TEXT),
+                                            );
+                                            ui.add_space(4.0);
+                                            let hoy = chrono::Local::now()
+                                                .format("%d-%m-%Y")
+                                                .to_string();
+                                            ui.label(
+                                                egui::RichText::new(hoy)
+                                                    .size(12.0)
+                                                    .color(DEEP_SUB),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new("08:00 a 08:00")
+                                                    .size(12.0)
+                                                    .color(DEEP_SUB),
+                                            );
+                                            let n_inc = self
+                                                .novedades
+                                                .iter()
+                                                .filter(|n| n.include)
+                                                .count();
+                                            ui.label(
+                                                egui::RichText::new(if self.novedades.is_empty()
+                                                {
+                                                    "Sin cargar".to_string()
+                                                } else {
+                                                    format!(
+                                                        "{} novedades, {} incluidas",
+                                                        self.novedades.len(),
+                                                        n_inc
+                                                    )
+                                                })
+                                                .size(12.0)
+                                                .color(DEEP_TEXT),
+                                            );
+                                        },
+                                    );
+                                });
+                        },
+                    );
+                });
+            });
+
+        // ================= Inspector derecho: Resumen (252 px) =================
+        egui::SidePanel::right("resumen")
+            .resizable(false)
+            .default_width(252.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("Resumen")
+                        .font(font_semibold(16.0))
+                        .color(TEXT_PRIMARY),
+                );
+                ui.add_space(8.0);
+
+                // Filas de estado del parte.
+                let zip_name = self
+                    .zip_path
+                    .as_ref()
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
+                let tpl_name = self
+                    .template_path
+                    .as_ref()
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
+                let ia_ok = !self.cfg.api_key.trim().is_empty();
+                let rows: [(&str, String); 5] = [
+                    (
+                        "Archivo",
+                        zip_name.unwrap_or_else(|| "Sin cargar".to_string()),
+                    ),
+                    (
+                        "Plantilla",
+                        tpl_name.unwrap_or_else(|| "Sin plantilla".to_string()),
+                    ),
+                    (
+                        "IA Conectada",
+                        if ia_ok {
+                            "Conectada".to_string()
+                        } else {
+                            "Sin API key".to_string()
+                        },
+                    ),
+                    ("Modelo", short_model(&self.cfg.model)),
+                    (
+                        "Salida .docx",
+                        if self.cfg.output_dir.trim().is_empty() {
+                            "Junto al .zip".to_string()
+                        } else {
+                            self.cfg.output_dir.clone()
+                        },
+                    ),
+                ];
+                for (k, v) in rows {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(k).size(12.0).color(TEXT_MUTED));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(v)
+                                    .size(12.0)
+                                    .strong()
+                                    .color(TEXT_PRIMARY),
                             );
                         });
                     });
-                    return;
+                    ui.add_space(2.0);
+                }
+                ui.separator();
+
+                // Rango de fechas del parte.
+                overline(ui, "Rango (08:00 a 08:00)");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.date_from)
+                            .hint_text("10-10-2026")
+                            .desired_width(96.0),
+                    );
+                    ui.label(egui::RichText::new("a").color(TEXT_SECONDARY));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.date_to)
+                            .hint_text("11-10-2026")
+                            .desired_width(96.0),
+                    );
+                });
+                ui.add_space(8.0);
+                ui.separator();
+
+                // Mini vista previa del documento (clic → vista completa).
+                let n_inc = self.novedades.iter().filter(|n| n.include).count();
+                let n_fotos: usize = self
+                    .novedades
+                    .iter()
+                    .filter(|n| n.include)
+                    .map(|n| n.photos.len())
+                    .sum();
+                let mini = egui::Frame::none()
+                    .fill(BG_CARD)
+                    .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
+                    .rounding(8.0)
+                    .inner_margin(12.0)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new("PARTE DIARIO")
+                                    .strong()
+                                    .size(12.0)
+                                    .color(ACCENT),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Anti-Ruidos y Contaminación Sónica, P.N.",
+                                )
+                                .size(11.0)
+                                .color(TEXT_MUTED),
+                            );
+                            ui.add_space(4.0);
+                            let fecha_doc = parse_fecha(&self.date_from)
+                                .map(|d| d.format("%d-%m-%Y").to_string());
+                            ui.label(
+                                egui::RichText::new(match fecha_doc {
+                                    Some(f) => format!("Santo Domingo, D.N., {f}"),
+                                    None => "Configure el rango de fechas.".to_string(),
+                                })
+                                .size(11.0)
+                                .color(TEXT_SECONDARY),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{n_inc} novedades, {n_fotos} fotos"
+                                ))
+                                .size(11.0)
+                                .color(TEXT_MUTED),
+                            );
+                            if self.novedades.is_empty() {
+                                ui.label(
+                                    egui::RichText::new("Aún no hay novedades cargadas.")
+                                        .size(11.0)
+                                        .color(TEXT_MUTED),
+                                );
+                            }
+                        });
+                    })
+                    .response
+                    .interact(egui::Sense::click());
+                if mini.clicked() {
+                    self.view = ViewMode::Preview;
+                    self.preview_seen = true;
+                }
+                mini.on_hover_text("Clic para ver la vista previa completa");
+                ui.add_space(8.0);
+
+                // Selector Editar | Vista previa.
+                ui.horizontal(|ui| {
+                    if seg_button(ui, "✏️ Editar", self.view == ViewMode::Edit).clicked() {
+                        self.view = ViewMode::Edit;
+                    }
+                    if seg_button(ui, "👁 Vista previa", self.view == ViewMode::Preview)
+                        .clicked()
+                    {
+                        self.view = ViewMode::Preview;
+                        self.preview_seen = true;
+                    }
+                });
+                ui.add_space(8.0);
+
+                // Avisos (colapsados por defecto).
+                let (nw, ni) = (self.warnings.len(), self.info.len());
+                if nw + ni > 0 {
+                    ui.horizontal(|ui| {
+                        let txt = if self.warnings.is_empty() {
+                            format!("ℹ {} nota{}", ni, if ni == 1 { "" } else { "s" })
+                        } else {
+                            format!("⚠ {} aviso{}", nw, if nw == 1 { "" } else { "s" })
+                        };
+                        if btn_tertiary(ui, &txt).clicked() {
+                            self.alerts_expanded = !self.alerts_expanded;
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if btn_tertiary(ui, "Descartar").clicked() {
+                                self.warnings.clear();
+                                self.info.clear();
+                                self.alerts_expanded = false;
+                            }
+                        });
+                    });
+                    if self.alerts_expanded {
+                        egui::ScrollArea::vertical()
+                            .max_height(140.0)
+                            .show(ui, |ui| {
+                                for w in &self.warnings {
+                                    banner(ui, &format!("⚠ {w}"), *WARN_TINT, *WARN_LINE);
+                                }
+                                for i in &self.info {
+                                    banner(ui, &format!("ℹ {i}"), *INFO_TINT, *ACCENT_LINE);
+                                }
+                            });
+                    }
+                    ui.add_space(8.0);
                 }
 
+                // Acción final al pie del inspector. En un layout bottom_up
+                // lo primero que se añade queda abajo: Generar va primero
+                // (abajo del todo), luego Abrir y luego el aviso de éxito.
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    let missing: Vec<&str> = [
+                        (
+                            self.template_path.is_none(),
+                            "cargar la plantilla .docx",
+                        ),
+                        (self.zip_path.is_none(), "cargar el .zip del chat"),
+                        (
+                            parse_fecha(&self.date_from).is_none()
+                                || parse_fecha(&self.date_to).is_none(),
+                            "escribir un rango de fechas válido (DD-MM-AAAA)",
+                        ),
+                    ]
+                    .iter()
+                    .filter_map(|(bad, msg)| if *bad { Some(*msg) } else { None })
+                    .collect();
+                    let resp = btn_gold(ui, "⚡ Generar Parte Diario");
+                    let resp = if missing.is_empty() {
+                        resp
+                    } else {
+                        resp.on_hover_text(format!("Antes debe: {}.", missing.join("; ")))
+                    };
+                    if resp.clicked() {
+                        self.generate();
+                    }
+                    if let Some(gp) = self.generated_path.clone() {
+                        ui.add_space(6.0);
+                        if btn_secondary(ui, "📂 Abrir .docx").clicked() {
+                            match open::that(&gp) {
+                                Ok(()) => self.exported = true,
+                                Err(e) => self.log(format!("No se pudo abrir el archivo: {e}")),
+                            }
+                        }
+                    }
+                    if let Some(msg) = self.success_msg.clone() {
+                        ui.add_space(6.0);
+                        egui::Frame::none()
+                            .fill(*SUCCESS_TINT)
+                            .stroke(egui::Stroke::new(1.0_f32, *SUCCESS_LINE))
+                            .rounding(8.0)
+                            .inner_margin(10.0)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(msg)
+                                        .size(12.0)
+                                        .color(TEXT_PRIMARY),
+                                );
+                            });
+                    }
+                });
+            });
+
+        // ================= Central: stepper + contenido =================
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let steps = self.step_states();
+            stepper(ui, &steps);
+            ui.add_space(8.0);
+
+            if self.novedades.is_empty() {
+                if self.view == ViewMode::Preview {
+                    self.show_preview(ui, ctx);
+                } else {
+                    // Estado vacío: cargar el chat de esta noche.
+                    // Bloque compacto bajado con un espacio superior fijo:
+                    // centered_and_justified no sirve aquí (reparte el
+                    // espacio entre los hijos y empuja los botones fuera
+                    // del área visible).
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(120.0);
+                        ui.label(
+                            egui::RichText::new("Carga el chat de esta noche")
+                                .font(font_semibold(22.0))
+                                .color(TEXT_PRIMARY),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "Exporta el chat de WhatsApp como .zip y cárgalo aquí para armar el Parte Diario.",
+                            )
+                            .color(TEXT_SECONDARY),
+                        );
+                        ui.add_space(24.0);
+                    });
+                    // Zona de arrastre punteada.
+                    let zone_w = ui.available_width().min(520.0);
+                    let zone_h = 120.0;
+                    ui.horizontal(|ui| {
+                        let avail = ui.available_width();
+                        ui.add_space(((avail - zone_w) / 2.0).max(0.0));
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(zone_w, zone_h),
+                            egui::Sense::hover(),
+                        );
+                        dashed_rect(ui.painter(), rect, *ACCENT_LINE);
+                        ui.painter().text(
+                            rect.center() - egui::vec2(0.0, 10.0),
+                            egui::Align2::CENTER_CENTER,
+                            "Arrastra tu archivo .zip aquí",
+                            egui::FontId::proportional(14.0),
+                            TEXT_SECONDARY,
+                        );
+                        ui.painter().text(
+                            rect.center() + egui::vec2(0.0, 12.0),
+                            egui::Align2::CENTER_CENTER,
+                            "o suéltalo sobre esta ventana",
+                            egui::FontId::proportional(12.0),
+                            TEXT_MUTED,
+                        );
+                    });
+                    ui.add_space(16.0);
+                    ui.vertical_centered(|ui| {
+                        ui.horizontal(|ui| {
+                            if btn_action(ui, "📂 Cargar .zip de WhatsApp").clicked() {
+                                self.pick_zip();
+                            }
+                            if btn_secondary(ui, "👁 Ver ejemplo de exportación").clicked() {
+                                self.view = ViewMode::Preview;
+                                self.preview_seen = true;
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                    ui.vertical_centered(|ui| {
+                        if btn_tertiary(ui, "Cargar plantilla .docx").clicked() {
+                            self.pick_template();
+                        }
+                    });
+                }
+            } else if self.view == ViewMode::Preview {
+                self.show_preview(ui, ctx);
+            } else {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    // --- Novedades: búsqueda y acciones masivas ---
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Novedades ({})", self.novedades.len()))
+                                .font(font_semibold(16.0))
+                                .color(TEXT_PRIMARY),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if btn_tertiary(ui, "Excluir todas").clicked() {
+                                for n in &mut self.novedades {
+                                    n.include = false;
+                                }
+                            }
+                            if btn_tertiary(ui, "Incluir todas").clicked() {
+                                for n in &mut self.novedades {
+                                    n.include = true;
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.filter)
+                                .id_salt("search_field")
+                                .hint_text("Buscar por texto o #número…")
+                                .desired_width(f32::INFINITY),
+                        );
+                        if !self.filter.is_empty() && btn_tertiary(ui, "×").clicked() {
+                            self.filter.clear();
+                        }
+                    });
+                    ui.add_space(6.0);
+                    let bw = (ui.available_width() - 8.0) / 2.0;
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_sized(
+                                [bw, 0.0],
+                                egui::Button::new(
+                                    egui::RichText::new("✨ Formalizar todas con IA")
+                                        .strong()
+                                        .color(ACCENT_HOVER),
+                                )
+                                .fill(*ACCENT_TINT)
+                                .stroke(egui::Stroke::new(1.0_f32, *ACCENT_LINE))
+                                .rounding(10.0),
+                            )
+                            .clicked()
+                        {
+                            if self.cfg.api_key.trim().is_empty() {
+                                self.log("Sin API key: configure su key de OpenRouter (gratis) en Ajustes, o use la limpieza sin conexión.".to_string());
+                                self.api_key_edit = self.cfg.api_key.clone();
+                                self.provider_edit = self.cfg.provider.clone();
+                                self.model_edit = self.cfg.model.clone();
+                                self.output_dir_edit = self.cfg.output_dir.clone();
+                                self.show_settings = true;
+                            } else {
+                                let ids: Vec<usize> = self
+                                    .novedades
+                                    .iter()
+                                    .filter(|n| n.include && !n.body_raw.trim().is_empty())
+                                    .map(|n| n.id)
+                                    .collect();
+                                self.spawn_formalize_many(ids);
+                            }
+                        }
+                        if ui
+                            .add_sized(
+                                [bw, 0.0],
+                                egui::Button::new(
+                                    egui::RichText::new("Limpieza a todas (sin conexión)")
+                                        .color(TEXT_PRIMARY),
+                                )
+                                .fill(BG_HOVER)
+                                .stroke(egui::Stroke::new(1.0_f32, BORDER_SUBTLE))
+                                .rounding(8.0),
+                            )
+                            .clicked()
+                        {
+                            let mut k = 0;
+                            for n in self
+                                .novedades
+                                .iter_mut()
+                                .filter(|n| n.include && !n.body_raw.trim().is_empty())
+                            {
+                                n.body_formal = llm::cleanup_offline(&n.body_raw);
+                                k += 1;
+                            }
+                            self.log(format!(
+                                "Limpieza sin conexión aplicada a {k} novedades."
+                            ));
+                        }
+                    });
+                    ui.add_space(8.0);
+
+                    // --- Lista de novedades ---
+                    let visible = self.visible_novedades();
+                    if visible.is_empty() {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(24.0);
+                            ui.label(
+                                egui::RichText::new("Sin coincidencias").color(TEXT_SECONDARY),
+                            );
+                        });
+                    } else {
                     for i in visible {
                         let (sel, snippet, fecha, nphotos, is_orphan, include, formalizado, busy) = {
                             let n = &self.novedades[i];
@@ -1804,7 +1872,7 @@ impl eframe::App for App {
                                             if busy {
                                                 pill_tint(ui, "formalizando…", *ACCENT_TINT, ACCENT);
                                             } else if formalizado {
-                                                pill_tint(ui, "✓ formalizado", *SUCCESS_TINT, SUCCESS);
+                                                pill_tint(ui, "Formalizado", *SUCCESS_TINT, SUCCESS);
                                             }
                                         });
                                     });
@@ -1823,46 +1891,11 @@ impl eframe::App for App {
                         }
                         ui.add_space(6.0);
                     }
-                });
-            });
+                    }
+                    ui.add_space(8.0);
 
-        // ================= Central: editor =================
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if self.novedades.is_empty() {
-                ui.centered_and_justified(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(70.0);
-                        ui.label(egui::RichText::new("📂").size(56.0));
-                        ui.add_space(8.0);
-                        ui.label(egui::RichText::new("Sin novedades").size(20.0).strong());
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "Cargue el .zip exportado del chat de WhatsApp para comenzar.",
-                            )
-                            .color(TEXT_SECONDARY),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "También puede arrastrar el archivo hasta esta ventana.",
-                            )
-                            .color(TEXT_MUTED)
-                            .size(12.0),
-                        );
-                        ui.add_space(16.0);
-                        if btn_primary(ui, "📂 Cargar .zip del chat").clicked() {
-                            self.pick_zip();
-                        }
-                        ui.add_space(8.0);
-                        if btn_secondary(ui, "📄 Cargar plantilla .docx").clicked() {
-                            self.pick_template();
-                        }
-                    });
-                });
-            } else {
-                let idx = self.selected;
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                    // --- Editor de la novedad seleccionada ---
+                    let idx = self.selected;
                     // --- encabezado de la novedad + navegación ---
                     card(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -1879,8 +1912,7 @@ impl eframe::App for App {
                                     "Novedad #{}",
                                     self.novedades[idx].id
                                 ))
-                                .strong()
-                                .size(15.0)
+                                .font(font_semibold(16.0))
                                 .color(TEXT_PRIMARY),
                             );
                             let mut inc = self.novedades[idx].include;
@@ -1900,16 +1932,16 @@ impl eframe::App for App {
                                 )
                             };
                             if self.novedades[idx].is_orphan {
-                                pill_tint(ui, "📷 FOTOS HUÉRFANAS", *WARN_TINT, WARNING);
+                                pill_tint(ui, "📷 Fotos huérfanas", *WARN_TINT, WARNING);
                             }
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if btn_tertiary(ui, "Siguiente pendiente →").clicked() {
+                                    if btn_tertiary(ui, "Siguiente pendiente").clicked() {
                                         self.next_pending();
                                     }
                                     ui.small(
-                                        egui::RichText::new(format!("{sender} · {fecha_txt}"))
+                                        egui::RichText::new(format!("{sender}, {fecha_txt}"))
                                             .color(TEXT_SECONDARY),
                                     );
                                 },
@@ -1919,7 +1951,9 @@ impl eframe::App for App {
                     ui.add_space(8.0);
 
                     // --- encabezados ---
-                    card(ui, |ui| {
+                    // Sección lisa (sin tarjeta): el trabajo de texto no
+                    // necesita un marco; el título con su regla basta.
+                    ui.vertical(|ui| {
                         section_title(ui, "Encabezados institucionales");
                         let headers_text = self.novedades[idx].headers.join("\n");
                         let mut tmp = headers_text.clone();
@@ -1941,7 +1975,7 @@ impl eframe::App for App {
                     ui.add_space(8.0);
 
                     // --- texto crudo ---
-                    card(ui, |ui| {
+                    ui.vertical(|ui| {
                         section_title(ui, "Texto original (así lo escribió el agente)");
                         ui.add(
                             egui::TextEdit::multiline(&mut self.novedades[idx].body_raw)
@@ -1965,7 +1999,7 @@ impl eframe::App for App {
                                     self.spawn_formalize(vec![id], true);
                                 }
                             }
-                            let r2 = btn_secondary(ui, "🧹 Limpieza sin conexión");
+                            let r2 = btn_secondary(ui, "Limpieza sin conexión");
                             if r2.clicked() && !busy {
                                 self.spawn_formalize(vec![id], false);
                             }
@@ -1980,7 +2014,7 @@ impl eframe::App for App {
                     ui.add_space(8.0);
 
                     // --- texto formal ---
-                    card(ui, |ui| {
+                    ui.vertical(|ui| {
                         section_title(ui, "Texto formal (revise y edite antes de generar)");
                         ui.add(
                             egui::TextEdit::multiline(&mut self.novedades[idx].body_formal)
@@ -2148,6 +2182,7 @@ impl eframe::App for App {
             }
         });
 
+
         // ================= Ajustes =================
         if self.show_settings {
             let mut keep_open = true;
@@ -2195,7 +2230,7 @@ impl eframe::App for App {
 
                         if is_openrouter {
                             ui.label(egui::RichText::new("API key de OpenRouter (gratis)").strong());
-                            ui.small("Consígala sin tarjeta en https://openrouter.ai/keys → péguela aquí.");
+                            ui.small("Consígala sin tarjeta en https://openrouter.ai/keys y péguela aquí.");
                         } else if is_freellmapi {
                             ui.label(egui::RichText::new("API key de FreeLLMApi (Local)").strong());
                             ui.small("Clave unificada de su servicio local. Debe estar corriendo en http://127.0.0.1:31415.");
@@ -2337,25 +2372,70 @@ impl eframe::App for App {
             self.show_log = open;
         }
 
+        // ================= Historial de partes generados =================
+        if self.show_history {
+            let mut open = true;
+            egui::Window::new("🕘 Historial de partes")
+                .id(egui::Id::new("history_win"))
+                .open(&mut open)
+                .default_width(560.0)
+                .show(ctx, |ui| {
+                    if self.hist.entries.is_empty() {
+                        ui.label(
+                            egui::RichText::new("Aún no hay partes generados.")
+                                .color(TEXT_SECONDARY),
+                        );
+                    } else {
+                        let mut entries = self.hist.entries.clone();
+                        entries.reverse();
+                        egui::ScrollArea::vertical()
+                            .max_height(320.0)
+                            .show(ui, |ui| {
+                                for e in entries {
+                                    ui.horizontal(|ui| {
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} a {}",
+                                                    e.report_start, e.report_end
+                                                ))
+                                                .strong()
+                                                .color(TEXT_PRIMARY),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{}, {} novedades, {}",
+                                                    e.generated_at, e.novedades, e.zip_name
+                                                ))
+                                                .size(11.5)
+                                                .color(TEXT_SECONDARY),
+                                            );
+                                        });
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let p = PathBuf::from(&e.output_path);
+                                                if p.exists() && btn_secondary(ui, "Abrir").clicked()
+                                                {
+                                                    if let Err(err) = open::that(&p) {
+                                                        self.log(format!(
+                                                            "No se pudo abrir el archivo: {err}"
+                                                        ));
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    });
+                                    ui.separator();
+                                }
+                            });
+                    }
+                });
+            self.show_history = open;
+        }
         if !self.pending_llm.is_empty() {
             ctx.request_repaint();
         }
     }
 }
 
-/// Abrevia un nombre de archivo por el centro: "informe…final.docx".
-fn truncate_middle(s: &str, max: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max {
-        return s.to_string();
-    }
-    let keep = max.saturating_sub(1);
-    let head = keep / 2;
-    let tail = keep - head;
-    let out: String = chars[..head]
-        .iter()
-        .chain(std::iter::once(&'…'))
-        .chain(chars[chars.len() - tail..].iter())
-        .collect();
-    out
-}

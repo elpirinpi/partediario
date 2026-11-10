@@ -164,6 +164,24 @@ pub fn download_and_prepare_to_dir(dir: &Path, info: &UpdateInfo) -> Result<Path
     Ok(staging.join("parte-diario.exe"))
 }
 
+/// Lanza un comando sin mostrar ninguna ventana de consola.
+///
+/// En Windows usa la flag de creación `CREATE_NO_WINDOW` (0x08000000): el
+/// `cmd` que ejecuta el script de actualización corre totalmente oculto.
+/// El `start "" /MIN` anterior no lo ocultaba de forma fiable y la ventana
+/// del CMD aparecía en pantalla (y se quedaba ahí si el script se atascaba).
+/// En otras plataformas el lanzamiento es normal (el actualizador solo se
+/// usa en Windows, pero el crate debe compilar en Linux para desarrollo/CI).
+fn spawn_sin_consola(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: el proceso no crea ventana de consola.
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd.spawn()
+}
+
 pub fn apply_on_exit(new_exe: &Path) -> Result<(), UpdaterError> {
     let current = std::env::current_exe().map_err(|e| UpdaterError::Io(e.to_string()))?;
     let backup_dir = paths::backups_dir();
@@ -173,14 +191,12 @@ pub fn apply_on_exit(new_exe: &Path) -> Result<(), UpdaterError> {
         chrono::Local::now().format("%Y%m%d-%H%M%S")
     ));
     let script = write_update_script(&current, new_exe, &backup)?;
-    std::process::Command::new("cmd")
-        .arg("/C")
-        .arg("start")
-        .arg("")
-        .arg("/MIN")
-        .arg(&script)
-        .spawn()
-        .map_err(|e| UpdaterError::Io(e.to_string()))?;
+    // Sin `start`: el script corre directo en este `cmd` (ya desacoplado con
+    // `spawn`, la app puede cerrarse mientras el script trabaja) y con
+    // CREATE_NO_WINDOW no aparece ninguna ventana.
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.arg("/C").arg(&script);
+    spawn_sin_consola(&mut cmd).map_err(|e| UpdaterError::Io(e.to_string()))?;
     Ok(())
 }
 
@@ -188,14 +204,9 @@ pub fn rollback() -> Result<PathBuf, UpdaterError> {
     let backup = latest_backup(&paths::backups_dir())?;
     let current = std::env::current_exe().map_err(|e| UpdaterError::Io(e.to_string()))?;
     let script = write_rollback_script(&current, &backup)?;
-    std::process::Command::new("cmd")
-        .arg("/C")
-        .arg("start")
-        .arg("")
-        .arg("/MIN")
-        .arg(&script)
-        .spawn()
-        .map_err(|e| UpdaterError::Io(e.to_string()))?;
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.arg("/C").arg(&script);
+    spawn_sin_consola(&mut cmd).map_err(|e| UpdaterError::Io(e.to_string()))?;
     Ok(backup)
 }
 
@@ -294,17 +305,27 @@ fn write_update_script(
     Ok(script)
 }
 
+/// Límite de reintentos al mover/copiar el .exe (1 s entre intentos).
+/// Antes el bucle `:esperar` no tenía límite: si el .exe seguía bloqueado
+/// (la app no terminó de cerrar, antivirus, etc.) giraba para siempre y la
+/// actualización se quedaba "bloqueada". Con el límite, tras ~30 s el script
+/// sale con error y el .exe original sigue intacto.
+const MAX_INTENTOS_MOVER: u32 = 30;
+
 fn update_script_content(current: &Path, new_exe: &Path, backup: &Path) -> String {
     format!(
         "@echo off\r\n\
          setlocal\r\n\
          timeout /t 2 /nobreak >nul\r\n\
+         set intentos=0\r\n\
          :esperar\r\n\
          move /y \"{current}\" \"{backup}\" >nul 2>&1\r\n\
-         if errorlevel 1 (\r\n\
-           timeout /t 1 /nobreak >nul\r\n\
-           goto esperar\r\n\
-         )\r\n\
+         if not errorlevel 1 goto mover_ok\r\n\
+         set /a intentos+=1\r\n\
+         if %intentos% geq {max} exit /b 1\r\n\
+         timeout /t 1 /nobreak >nul\r\n\
+         goto esperar\r\n\
+         :mover_ok\r\n\
          copy /y \"{new}\" \"{current}\" >nul\r\n\
          if errorlevel 1 (\r\n\
            copy /y \"{backup}\" \"{current}\" >nul\r\n\
@@ -316,7 +337,8 @@ fn update_script_content(current: &Path, new_exe: &Path, backup: &Path) -> Strin
          del \"%~f0\" >nul 2>&1\r\n",
         current = current.display(),
         backup = backup.display(),
-        new = new_exe.display()
+        new = new_exe.display(),
+        max = MAX_INTENTOS_MOVER
     )
 }
 
@@ -334,16 +356,20 @@ fn rollback_script_content(current: &Path, backup: &Path) -> String {
         "@echo off\r\n\
          setlocal\r\n\
          timeout /t 2 /nobreak >nul\r\n\
+         set intentos=0\r\n\
          :esperar\r\n\
          copy /y \"{backup}\" \"{current}\" >nul 2>&1\r\n\
-         if errorlevel 1 (\r\n\
-           timeout /t 1 /nobreak >nul\r\n\
-           goto esperar\r\n\
-         )\r\n\
+         if not errorlevel 1 goto copiar_ok\r\n\
+         set /a intentos+=1\r\n\
+         if %intentos% geq {max} exit /b 1\r\n\
+         timeout /t 1 /nobreak >nul\r\n\
+         goto esperar\r\n\
+         :copiar_ok\r\n\
          start \"\" \"{current}\"\r\n\
          del \"%~f0\" >nul 2>&1\r\n",
         current = current.display(),
-        backup = backup.display()
+        backup = backup.display(),
+        max = MAX_INTENTOS_MOVER
     )
 }
 
@@ -436,6 +462,11 @@ mod tests {
         assert!(content.contains("start \"\""));
         assert!(content.contains("goto esperar"));
         assert!(content.contains("exit /b 1"));
+        // El bucle de espera tiene límite: no puede girar para siempre si el
+        // .exe sigue bloqueado.
+        assert!(content.contains("set intentos=0"));
+        assert!(content.contains("set /a intentos+=1"));
+        assert!(content.contains(&format!("if %intentos% geq {MAX_INTENTOS_MOVER}")));
     }
 
     #[test]
@@ -449,6 +480,11 @@ mod tests {
         assert!(content.contains(r"C:\app\parte-diario.exe"));
         assert!(content.contains("start \"\""));
         assert!(content.contains("goto esperar"));
+        // El bucle de espera tiene límite: no puede girar para siempre si el
+        // .exe sigue bloqueado.
+        assert!(content.contains("set intentos=0"));
+        assert!(content.contains("set /a intentos+=1"));
+        assert!(content.contains(&format!("if %intentos% geq {MAX_INTENTOS_MOVER}")));
     }
 
     #[test]

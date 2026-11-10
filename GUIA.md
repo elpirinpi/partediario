@@ -73,6 +73,10 @@ encabezados y fotos a la izquierda, narrativa a la derecha).
 La app le avisa cuántas tablas viejas eliminó.
 
 ### Paso 4 — Revisar las novedades (revisión asistida)
+En la barra superior, el **indicador de pasos** (ZIP → Plantilla → Revisar →
+Formalizar → Fechas → Generar) muestra en qué punto del flujo está: pasos
+hechos en verde, el actual en dorado y los pendientes en gris.
+
 En la lista izquierda: marque/desmarque con el checkbox qué novedades entran
 al reporte. Al seleccionar una verá:
 
@@ -96,6 +100,13 @@ se muestra para su revisión y edición manual antes de generar el documento.
 
 > La redacción formal **preserva exactamente** nombres, cédulas, placas,
 > teléfonos, horas, montos y lugares. No inventa ni elimina datos.
+
+### Paso 5.5 — Vista previa del documento (antes de generar)
+En el panel central, cambie a **👁 Vista previa** para ver el Parte Diario
+tal como quedará: fecha, rango del asunto y cada novedad incluida con sus
+encabezados, fotos y texto formal (las que aún no se formalizaron llevan la
+marca "SIN FORMALIZAR"). La vista previa se actualiza sola al editar
+cualquier novedad; vuelva a **✏️ Editar** para seguir trabajando.
 
 ### Paso 6 — Generar
 Ajuste el rango de fechas si hace falta y pulse **3. Generar Parte Diario**.
