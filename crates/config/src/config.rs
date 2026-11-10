@@ -191,9 +191,15 @@ mod tests {
             parse_github_repository("git@github.com:acme/parte-diario.git"),
             "acme/parte-diario"
         );
-        assert!(parse_github_repository("https://github.com/TU-USUARIO/parte-diario").is_empty());
-        assert!(parse_github_repository("").is_empty());
-        assert!(parse_github_repository("https://gitlab.com/acme/parte-diario").is_empty());
+        assert_eq!(
+            parse_github_repository("https://github.com/TU-USUARIO/parte-diario"),
+            ""
+        );
+        assert_eq!(parse_github_repository(""), "");
+        assert_eq!(
+            parse_github_repository("https://gitlab.com/acme/parte-diario"),
+            ""
+        );
     }
 
     #[test]

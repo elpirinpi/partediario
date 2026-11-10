@@ -173,10 +173,9 @@ pub(crate) fn apply_style(style: &mut egui::Style) {
     style.spacing.indent = 16.0;
     style.spacing.interact_size = egui::vec2(32.0, 32.0);
     style.spacing.window_margin = egui::Margin::same(16.0);
-    style.text_styles.insert(
-        egui::TextStyle::Heading,
-        font_semibold(20.0),
-    );
+    style
+        .text_styles
+        .insert(egui::TextStyle::Heading, font_semibold(20.0));
     style.text_styles.insert(
         egui::TextStyle::Body,
         egui::FontId::new(13.5, egui::FontFamily::Proportional),
@@ -315,11 +314,8 @@ pub(crate) fn section_title(ui: &mut egui::Ui, title: &str) {
     // Regla fina azul-gris bajo el título.
     let rect = ui.available_rect_before_wrap();
     let y = rect.min.y + 1.0;
-    ui.painter().hline(
-        rect.x_range(),
-        y,
-        egui::Stroke::new(1.0_f32, BORDER_SUBTLE),
-    );
+    ui.painter()
+        .hline(rect.x_range(), y, egui::Stroke::new(1.0_f32, BORDER_SUBTLE));
     ui.add_space(8.0);
 }
 
@@ -372,10 +368,7 @@ pub(crate) fn stepper(ui: &mut egui::Ui, steps: &[(String, StepState)]) {
                 // del stack trae el glifo "✓" (se vería como □).
                 let s = 5.0;
                 painter.line_segment(
-                    [
-                        c + egui::vec2(-s, 0.0),
-                        c + egui::vec2(-s + 3.5, s - 1.0),
-                    ],
+                    [c + egui::vec2(-s, 0.0), c + egui::vec2(-s + 3.5, s - 1.0)],
                     egui::Stroke::new(2.0_f32, egui::Color32::WHITE),
                 );
                 painter.line_segment(
@@ -487,11 +480,11 @@ mod tests {
         super::install_fonts(&ctx);
         let fid = egui::FontId::proportional(13.0);
         let mut results = Vec::new();
-        ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
             ctx.fonts(|fonts| {
                 for c in [
-                    '→', '✓', '✕', '✗', '🧹', '×', '›', '·', '–', '—', '…', '•', '⚠', 'ℹ',
-                    '◀', '▶', '📂', '✨', '⚡', '⬆', '⇒',
+                    '→', '✓', '✕', '✗', '🧹', '×', '›', '·', '–', '—', '…', '•', '⚠', 'ℹ', '◀',
+                    '▶', '📂', '✨', '⚡', '⬆', '⇒',
                 ] {
                     results.push((c, fonts.has_glyph(&fid, c)));
                 }

@@ -8,6 +8,8 @@
 //! `date_from`/`date_to`); nunca regenera el .docx. Al editar una novedad,
 //! la vista previa se actualiza sola en el siguiente fotograma.
 
+use std::fmt::Write as _;
+
 use chrono::{Datelike, NaiveDate};
 use eframe::egui;
 
@@ -67,10 +69,7 @@ fn incluidas(novedades: &[Novedad]) -> Vec<&Novedad> {
     novedades
         .iter()
         .filter(|n| {
-            n.include
-                && !(n.is_orphan
-                    && n.body_raw.trim().is_empty()
-                    && n.headers.is_empty())
+            n.include && !(n.is_orphan && n.body_raw.trim().is_empty() && n.headers.is_empty())
         })
         .collect()
 }
@@ -154,8 +153,7 @@ impl App {
     pub(crate) fn show_preview(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let desde = super::parse_fecha(&self.date_from);
         let hasta = super::parse_fecha(&self.date_to);
-        let fechas_validas =
-            matches!((desde, hasta), (Some(d), Some(h)) if h >= d);
+        let fechas_validas = matches!((desde, hasta), (Some(d), Some(h)) if h >= d);
         let items: Vec<NovedadPreview> = incluidas(&self.novedades)
             .iter()
             .map(|n| resolver(n))
@@ -372,9 +370,7 @@ impl App {
                                 n_fotos
                             );
                             if excluidas > 0 {
-                                pie.push_str(&format!(
-                                    ", {excluidas} excluidas (no aparecen)"
-                                ));
+                                let _ = write!(pie, ", {excluidas} excluidas (no aparecen)");
                             }
                             ui.label(
                                 egui::RichText::new(pie)

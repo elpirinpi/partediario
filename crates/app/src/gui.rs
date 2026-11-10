@@ -15,7 +15,13 @@
 mod preview;
 mod theme;
 
-use self::theme::*;
+use self::theme::{
+    app_visuals, banner, btn_action, btn_gold, btn_primary, btn_secondary, btn_tertiary, card,
+    dashed_rect, font_bold, font_semibold, overline, pill, pill_tint, section_title, seg_button,
+    stepper, StepState, ACCENT, ACCENT_HOVER, ACCENT_LINE, ACCENT_TINT, BG_CARD, BG_HOVER,
+    BORDER_SUBTLE, DEEP_BG, DEEP_SUB, DEEP_TEXT, INFO_TINT, ON_ACCENT, SUCCESS, SUCCESS_LINE,
+    SUCCESS_TINT, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY, WARNING, WARN_LINE, WARN_TINT,
+};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
@@ -1046,10 +1052,7 @@ impl App {
                 .iter()
                 .filter(|n| n.include && !n.body_raw.trim().is_empty())
                 .collect();
-            !pendientes.is_empty()
-                && pendientes
-                    .iter()
-                    .all(|n| !n.body_formal.trim().is_empty())
+            !pendientes.is_empty() && pendientes.iter().all(|n| !n.body_formal.trim().is_empty())
         };
         let gen_ok = self.generated_path.is_some();
         let edit_ok = self.preview_seen;
@@ -1340,27 +1343,20 @@ impl eframe::App for App {
                                                     .color(DEEP_TEXT),
                                             );
                                             ui.add_space(4.0);
-                                            let hoy = chrono::Local::now()
-                                                .format("%d-%m-%Y")
-                                                .to_string();
+                                            let hoy =
+                                                chrono::Local::now().format("%d-%m-%Y").to_string();
                                             ui.label(
-                                                egui::RichText::new(hoy)
-                                                    .size(12.0)
-                                                    .color(DEEP_SUB),
+                                                egui::RichText::new(hoy).size(12.0).color(DEEP_SUB),
                                             );
                                             ui.label(
                                                 egui::RichText::new("08:00 a 08:00")
                                                     .size(12.0)
                                                     .color(DEEP_SUB),
                                             );
-                                            let n_inc = self
-                                                .novedades
-                                                .iter()
-                                                .filter(|n| n.include)
-                                                .count();
+                                            let n_inc =
+                                                self.novedades.iter().filter(|n| n.include).count();
                                             ui.label(
-                                                egui::RichText::new(if self.novedades.is_empty()
-                                                {
+                                                egui::RichText::new(if self.novedades.is_empty() {
                                                     "Sin cargar".to_string()
                                                 } else {
                                                     format!(
@@ -1486,11 +1482,9 @@ impl eframe::App for App {
                                     .color(ACCENT),
                             );
                             ui.label(
-                                egui::RichText::new(
-                                    "Anti-Ruidos y Contaminación Sónica, P.N.",
-                                )
-                                .size(11.0)
-                                .color(TEXT_MUTED),
+                                egui::RichText::new("Anti-Ruidos y Contaminación Sónica, P.N.")
+                                    .size(11.0)
+                                    .color(TEXT_MUTED),
                             );
                             ui.add_space(4.0);
                             let fecha_doc = parse_fecha(&self.date_from)
@@ -1505,11 +1499,9 @@ impl eframe::App for App {
                             );
                             ui.add_space(4.0);
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "{n_inc} novedades, {n_fotos} fotos"
-                                ))
-                                .size(11.0)
-                                .color(TEXT_MUTED),
+                                egui::RichText::new(format!("{n_inc} novedades, {n_fotos} fotos"))
+                                    .size(11.0)
+                                    .color(TEXT_MUTED),
                             );
                             if self.novedades.is_empty() {
                                 ui.label(
@@ -1534,8 +1526,7 @@ impl eframe::App for App {
                     if seg_button(ui, "✏️ Editar", self.view == ViewMode::Edit).clicked() {
                         self.view = ViewMode::Edit;
                     }
-                    if seg_button(ui, "👁 Vista previa", self.view == ViewMode::Preview)
-                        .clicked()
+                    if seg_button(ui, "👁 Vista previa", self.view == ViewMode::Preview).clicked()
                     {
                         self.view = ViewMode::Preview;
                         self.preview_seen = true;
@@ -1583,10 +1574,7 @@ impl eframe::App for App {
                 // (abajo del todo), luego Abrir y luego el aviso de éxito.
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     let missing: Vec<&str> = [
-                        (
-                            self.template_path.is_none(),
-                            "cargar la plantilla .docx",
-                        ),
+                        (self.template_path.is_none(), "cargar la plantilla .docx"),
                         (self.zip_path.is_none(), "cargar el .zip del chat"),
                         (
                             parse_fecha(&self.date_from).is_none()
@@ -1623,11 +1611,7 @@ impl eframe::App for App {
                             .rounding(8.0)
                             .inner_margin(10.0)
                             .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(msg)
-                                        .size(12.0)
-                                        .color(TEXT_PRIMARY),
-                                );
+                                ui.label(egui::RichText::new(msg).size(12.0).color(TEXT_PRIMARY));
                             });
                     }
                 });
@@ -2182,7 +2166,6 @@ impl eframe::App for App {
             }
         });
 
-
         // ================= Ajustes =================
         if self.show_settings {
             let mut keep_open = true;
@@ -2415,7 +2398,8 @@ impl eframe::App for App {
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
                                                 let p = PathBuf::from(&e.output_path);
-                                                if p.exists() && btn_secondary(ui, "Abrir").clicked()
+                                                if p.exists()
+                                                    && btn_secondary(ui, "Abrir").clicked()
                                                 {
                                                     if let Err(err) = open::that(&p) {
                                                         self.log(format!(
@@ -2438,4 +2422,3 @@ impl eframe::App for App {
         }
     }
 }
-
